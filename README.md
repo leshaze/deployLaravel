@@ -35,7 +35,7 @@ Um das System weiter abzusichern empfehlen sich noch folgende Änderungen, diese
 
 ## Installation und Konfigration von fail2ban
 
-# Einrichten von nginx https mit selbst signiertem Zertifikat
+# Einrichten von nginx mit https und selbst signiertem Zertifikat
 Erstellen von einem eigenen Zertifikat
 ```
 sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/ssl/private/nginx-selfsigned.key -out /etc/ssl/certs/nginx-selfsigned.crt
