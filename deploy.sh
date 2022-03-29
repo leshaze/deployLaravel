@@ -41,7 +41,7 @@ then
 else 
     echo "Directory does exist"
     echo "Starting maintenance mode"
-    sudo chown -R leshaze:www-data /var/www/recordsArchive
+    sudo chown -R pi:www-data /var/www/recordsArchive
     cd /var/www/recordsArchive
     php artisan down
     wait
@@ -60,7 +60,7 @@ echo "Composer install and artisan migrate"
 php artisan migrate
 
 echo "Chown www-data"
-sudo chown -R www-data:www-data /var/www/recordsArchive
+sudo chown -R pi:www-data /var/www/recordsArchive
 sudo chmod -R 775 /var/www/recordsArchive/storage
 sudo chmod -R 775 /var/www/recordsArchive/bootstrap/cache
 
