@@ -40,7 +40,7 @@ sudo apt-get -y install curl wget git build-essential unzip|| exit
 # Installing PHP 8.1 and nginx
 echo -e "\e[96mInstalling PHP, sqlite and nginx ...\e[90m"
 sudo curl -sSL https://packages.sury.org/php/README.txt | sudo bash -x
-sudo apt-get -y install nginx php8.1 php8.1-fpm php8.1-cli php8.1-curl php8.1-s>
+sudo apt-get -y install nginx php8.1 php8.1-fpm php8.1-cli php8.1-curl php8.1-sqlite3 php8.1-xml sqlite3 libsqlite3-dev php-mbstring php-xml php-bcmath || exit
 
 # Install npm and nodejs
 echo -e "\e[96mInstalling NPM\e[90m"
