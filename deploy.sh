@@ -46,6 +46,8 @@ else
     wait
 
     echo "Get new changes"
+    git fetch   
+    git reset --hard HEAD
     sudo git pull --no-rebase origin main
     
     echo "Composer install"
