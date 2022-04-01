@@ -26,17 +26,16 @@ then
     echo "BROADCAST_DRIVER=log" >> .env
     echo "CACHE_DRIVER=file" >> .env
     echo "FILESYSTEM_DRIVER=local" >> .env
-
+       
+    echo "Composer install"
     composer install --optimize-autoloader --no-dev
-    php artisan key:generate
-    php artisan config:cache
-    php artisan route:cache
-    php artisan view:cache
-    npm clean-install
     npm run prod
 
     echo "Storage linking"
     php artisan storage:link
+    
+    #echo "Artisan migrate and seed"
+    #php artisan migrate:fresh --seed
 
 else 
     echo "Directory does exist"
@@ -48,19 +47,18 @@ else
 
     echo "Get new changes"
     sudo git pull --no-rebase origin main
+    
+    echo "Composer install"
     composer install --optimize-autoloader --no-dev
-    php artisan config:cache
-    php artisan route:cache
-    php artisan view:cache
     npm run prod
+    
+    #echo "Artisan migrate"
+    #php artisan migrate
 
 fi
 
-echo "Composer install and artisan migrate"
-php artisan migrate
-
 echo "Chown www-data"
-sudo chown -R pi:www-data /var/www/recordsArchive
+sudo chown -R www-data:www-data /var/www/recordsArchive
 sudo chmod -R 775 /var/www/recordsArchive/storage
 sudo chmod -R 775 /var/www/recordsArchive/bootstrap/cache
 
