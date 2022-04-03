@@ -50,8 +50,8 @@ else
     sudo git pull --no-rebase origin main
     
     echo "Composer install"
-    composer install --optimize-autoloader --no-dev
-    npm run prod
+    sudo -u www-data composer install --optimize-autoloader --no-dev
+    sudo -u www-data npm run prod
     
     #echo "Artisan migrate"
     #php artisan migrate
