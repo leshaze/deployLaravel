@@ -40,7 +40,6 @@ then
 else 
     echo "Directory does exist"
     echo "Starting maintenance mode"
-    sudo chown -R pi:www-data /var/www/recordsArchive
     cd /var/www/recordsArchive
     php artisan down
     wait
