@@ -26,7 +26,9 @@ then
     echo "BROADCAST_DRIVER=log" >> .env
     echo "CACHE_DRIVER=file" >> .env
     echo "FILESYSTEM_DRIVER=local" >> .env
-       
+   
+    php artisan key:generate
+    
     echo "Composer install"
     composer install --optimize-autoloader --no-dev
     npm run prod
