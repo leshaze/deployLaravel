@@ -3,19 +3,19 @@
 clear
 echo "Start deployment..."
 echo "Check if directory exist..."
-if [ ! -d "/var/www/recordsArchive" ] 
+if [ ! -d "/var/www/recordLoom" ] 
 then
     echo "Directory does not exist"
     echo "Clone repository"
-    git clone https://github.com/leshaze/recordsArchive.git
-    sudo mv recordsArchive /var/www/recordsArchive
+    git clone https://github.com/leshaze/recordLoom.git
+    sudo mv recordLoom /var/www/recordLoom
     
     echo "Starting maintenance mode"
-    cd /var/www/recordsArchive
+    cd /var/www/recordLoom
     touch database/database.sqlite
-    sudo chmod 775 /var/www/recordsArchive/database/database.sqlite
+    sudo chmod 775 /var/www/recordLoom/database/database.sqlite
     touch .env
-    echo "APP_NAME=recordsArchive" >> .env
+    echo "APP_NAME=recordLoom" >> .env
     echo "APP_ENV=production" >> .env
     echo "APP_KEY=" >> .env
     echo "APP_DEBUG=false" >> .env
@@ -26,24 +26,38 @@ then
     echo "BROADCAST_DRIVER=log" >> .env
     echo "CACHE_DRIVER=file" >> .env
     echo "FILESYSTEM_DRIVER=local" >> .env
-   
-    php artisan key:generate
-    
+       
     echo "Composer install"
     composer install --optimize-autoloader --no-dev
-    npm run prod
+    npm run build
 
     echo "Storage linking"
     php artisan storage:link
+
+    echo "Generate Key"
+    php artisan key:generate
     
     #echo "Artisan migrate and seed"
     #php artisan migrate:fresh --seed
 
+    echo "Puppeteer-Config for PDF with chromium"
+    touch .puppeteerrc.cjs
+    echo "const {join} = require('path');" >> .puppeteerrc.cjs
+    echo "/**" >> .puppeteerrc.cjs
+    echo "* @type {import("puppeteer").Configuration}" >> .puppeteerrc.cjs
+    echo "*/" >> .puppeteerrc.cjs
+    echo "module.exports = {" >> .puppeteerrc.cjs
+    echo "// Changes the cache location for Puppeteer." >> .puppeteerrc.cjs
+    echo "cacheDirectory: join(__dirname, '.cache', 'puppeteer')," >> .puppeteerrc.cjs
+    echo "executablePath: '/usr/bin/chromium'" >> .puppeteerrc.cjs
+    echo "};" >> .puppeteerrc.cjs
+
 else 
     echo "Directory does exist"
     echo "Starting maintenance mode"
-    cd /var/www/recordsArchive
-    php artisan down
+    
+    cd /var/www/recordLoom
+    sudo php artisan down
     wait
 
     echo "Get new changes"
@@ -53,19 +67,23 @@ else
     
     echo "Composer install"
     sudo -u www-data composer install --optimize-autoloader --no-dev
-    sudo -u www-data npm run prod
+    sudo -u www-data npm run build
     
     #echo "Artisan migrate"
     #php artisan migrate
+    echo "Chown www-data"
+    sudo chown -R www-data:www-data /var/www/recordLoom
+    sudo chmod -R 775 /var/www/recordLoom/storage
+    sudo chmod -R 775 /var/www/recordLoom/bootstrap/cache
+
+    echo "Ending maintenance mode"
+    sudo php artisan up
 
 fi
 
 echo "Chown www-data"
-sudo chown -R www-data:www-data /var/www/recordsArchive
-sudo chmod -R 775 /var/www/recordsArchive/storage
-sudo chmod -R 775 /var/www/recordsArchive/bootstrap/cache
-
-echo "Ending maintenance mode"
-php artisan up
+sudo chown -R www-data:www-data /var/www/recordLoom
+sudo chmod -R 775 /var/www/recordLoom/storage
+sudo chmod -R 775 /var/www/recordLoom/bootstrap/cache
 
 echo "Deployment complete. Have a nice day"
