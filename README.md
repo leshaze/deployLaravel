@@ -76,6 +76,7 @@ server {
         deny all;
     }
 }
+```
 
 # Einrichten von nginx mit https und selbst signiertem Zertifikat
 Erstellen von einem eigenen Zertifikat
