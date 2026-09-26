@@ -1,89 +1,228 @@
 #!/usr/bin/env bash
+#
+# Installiert bzw. aktualisiert recordLoom. Wird von installer.sh als
+# /usr/local/sbin/recordloom-deploy installiert und kann jederzeit erneut
+# ausgeführt werden, um den aktuellen Stand aus Git einzuspielen:
+#
+#   sudo recordloom-deploy
+#
+# Einstellungen stehen in /etc/recordloom/recordloom.conf und können per
+# Umgebungsvariable überschrieben werden.
 
-clear
-echo "Start deployment..."
-echo "Check if directory exist..."
-if [ ! -d "/var/www/recordLoom" ] 
-then
-    echo "Directory does not exist"
-    echo "Clone repository"
-    git clone https://github.com/leshaze/recordLoom.git
-    sudo mv recordLoom /var/www/recordLoom
-    
-    echo "Starting maintenance mode"
-    cd /var/www/recordLoom
-    touch database/database.sqlite
-    sudo chmod 775 /var/www/recordLoom/database/database.sqlite
-    touch .env
-    echo "APP_NAME=recordLoom" >> .env
-    echo "APP_ENV=production" >> .env
-    echo "APP_KEY=" >> .env
-    echo "APP_DEBUG=false" >> .env
-    echo "LOG_CHANNEL=stack" >> .env
-    echo "LOG_DEPRECATIONS_CHANNEL=null" >> .env
-    echo "LOG_LEVEL=debug" >> .env
-    echo "DB_CONNECTION=sqlite" >> .env
-    echo "BROADCAST_DRIVER=log" >> .env
-    echo "CACHE_DRIVER=file" >> .env
-    echo "FILESYSTEM_DRIVER=local" >> .env
-       
-    echo "Composer install"
-    composer install --optimize-autoloader --no-dev
-    npm run build
+main() {
+    set -Eeuo pipefail
+    exec </dev/null
 
-    echo "Storage linking"
-    php artisan storage:link
+    if [ -f /etc/recordloom/recordloom.conf ]; then
+        # shellcheck disable=SC1091
+        . /etc/recordloom/recordloom.conf
+    fi
+    APP_NAME="${APP_NAME:-recordLoom}"
+    APP_REPO="${APP_REPO:-https://github.com/leshaze/recordLoom.git}"
+    APP_BRANCH="${APP_BRANCH:-main}"
+    APP_DIR="${APP_DIR:-/var/www/recordLoom}"
+    APP_TIMEZONE="${APP_TIMEZONE:-Europe/Berlin}"
+    PHP_VERSION="${PHP_VERSION:-}"
+    SEED_DEMO_DATA="${SEED_DEMO_DATA:-0}"
+    APP_USER="${APP_USER:-www-data}"
+    APP_HOME=/var/lib/recordloom
+    BACKUP_DIR=/var/backups/recordloom
+    KEEP_BACKUPS="${KEEP_BACKUPS:-14}"
 
-    echo "Generate Key"
-    php artisan key:generate
-    
-    #echo "Artisan migrate and seed"
-    #php artisan migrate:fresh --seed
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "Bitte mit sudo ausführen." >&2
+        exit 1
+    fi
 
-    echo "Puppeteer-Config for PDF with chromium"
-    touch .puppeteerrc.cjs
-    echo "const {join} = require('path');" >> .puppeteerrc.cjs
-    echo "/**" >> .puppeteerrc.cjs
-    echo "* @type {import("puppeteer").Configuration}" >> .puppeteerrc.cjs
-    echo "*/" >> .puppeteerrc.cjs
-    echo "module.exports = {" >> .puppeteerrc.cjs
-    echo "// Changes the cache location for Puppeteer." >> .puppeteerrc.cjs
-    echo "cacheDirectory: join(__dirname, '.cache', 'puppeteer')," >> .puppeteerrc.cjs
-    echo "executablePath: '/usr/bin/chromium'" >> .puppeteerrc.cjs
-    echo "};" >> .puppeteerrc.cjs
+    PHP_BIN="php${PHP_VERSION}"
+    command -v "$PHP_BIN" >/dev/null || PHP_BIN=php
+    PHP_FPM_SERVICE="$("$PHP_BIN" -r 'echo "php".PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION."-fpm";')"
+    for tool in git composer npm sqlite3; do
+        command -v "$tool" >/dev/null || { error "$tool fehlt - bitte zuerst installer.sh ausführen"; exit 1; }
+    done
 
-else 
-    echo "Directory does exist"
-    echo "Starting maintenance mode"
-    
-    cd /var/www/recordLoom
-    sudo php artisan down
-    wait
+    install -d -o "$APP_USER" -g "$APP_USER" -m 750 "$APP_HOME"
+    install -d -o root -g root -m 700 "$BACKUP_DIR"
 
-    echo "Get new changes"
-    git fetch   
-    git reset --hard HEAD
-    sudo git pull --no-rebase origin main
-    
-    echo "Composer install"
-    sudo -u www-data composer install --optimize-autoloader --no-dev
-    sudo -u www-data npm run build
-    
-    #echo "Artisan migrate"
-    #php artisan migrate
-    echo "Chown www-data"
-    sudo chown -R www-data:www-data /var/www/recordLoom
-    sudo chmod -R 775 /var/www/recordLoom/storage
-    sudo chmod -R 775 /var/www/recordLoom/bootstrap/cache
+    MAINTENANCE=0
+    trap on_exit EXIT
+    trap 'error "Abbruch in Zeile $LINENO (Befehl: $BASH_COMMAND)"' ERR
 
-    echo "Ending maintenance mode"
-    sudo php artisan up
+    step "Deployment von $APP_NAME ($APP_BRANCH) nach $APP_DIR"
+    local fresh=0
+    if [ ! -d "$APP_DIR/.git" ]; then
+        fresh=1
+        if [ -d "$APP_DIR" ] && [ -n "$(ls -A "$APP_DIR")" ]; then
+            error "$APP_DIR existiert, ist aber kein Git-Repository"
+            exit 1
+        fi
+        step "Repository klonen"
+        install -d -o "$APP_USER" -g "$APP_USER" "$APP_DIR"
+        as_app git clone --branch "$APP_BRANCH" "$APP_REPO" "$APP_DIR"
+        cd "$APP_DIR"
+    else
+        cd "$APP_DIR"
+        # Ältere Versionen dieses Skripts haben teilweise als root gearbeitet.
+        chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+        if [ -f vendor/autoload.php ] && [ -f .env ]; then
+            step "Wartungsmodus aktivieren"
+            if as_app "$PHP_BIN" artisan down --retry=15; then
+                MAINTENANCE=1
+            else
+                warn "artisan down fehlgeschlagen"
+            fi
+        fi
+        step "Neuesten Stand holen"
+        as_app git remote set-url origin "$APP_REPO"
+        as_app git fetch --prune origin "$APP_BRANCH"
+        as_app git checkout -B "$APP_BRANCH" "origin/$APP_BRANCH"
+        as_app git reset --hard "origin/$APP_BRANCH"
+    fi
+    info "Stand: $(as_app git log -1 --format='%h %s (%ci)')"
 
-fi
+    step ".env prüfen"
+    local new_env=0
+    if [ ! -f .env ]; then
+        new_env=1
+        as_app cp .env.example .env
+    fi
+    # Bei einer neuen .env alles setzen, bei einer bestehenden nur fehlende
+    # Werte ergänzen, damit eigene Anpassungen erhalten bleiben.
+    local host
+    host="$(hostname)"
+    env_value APP_NAME "$APP_NAME" "$new_env"
+    env_value APP_ENV production "$new_env"
+    env_value APP_DEBUG false "$new_env"
+    env_value APP_URL "https://${host}.local" "$new_env"
+    env_value APP_TIMEZONE "$APP_TIMEZONE" "$new_env"
+    env_value LOG_CHANNEL stack "$new_env"
+    env_value LOG_STACK daily "$new_env"
+    env_value LOG_DAILY_DAYS 14 "$new_env"
+    env_value LOG_LEVEL warning "$new_env"
+    env_value DB_CONNECTION sqlite "$new_env"
+    env_value SESSION_DRIVER database "$new_env"
+    env_value SESSION_SECURE_COOKIE true "$new_env"
+    env_value CACHE_STORE database "$new_env"
+    env_value QUEUE_CONNECTION sync "$new_env"
+    env_value FILESYSTEM_DISK local "$new_env"
+    env_value BROADCAST_CONNECTION log "$new_env"
+    chown "$APP_USER:$APP_USER" .env
+    chmod 640 .env
 
-echo "Chown www-data"
-sudo chown -R www-data:www-data /var/www/recordLoom
-sudo chmod -R 775 /var/www/recordLoom/storage
-sudo chmod -R 775 /var/www/recordLoom/bootstrap/cache
+    if [ ! -f database/database.sqlite ]; then
+        as_app touch database/database.sqlite
+    fi
 
-echo "Deployment complete. Have a nice day"
+    step "Composer-Abhängigkeiten installieren"
+    as_app composer install --no-dev --optimize-autoloader --no-interaction --no-progress
+
+    if ! grep -q '^APP_KEY=base64:' .env; then
+        step "APP_KEY erzeugen"
+        as_app "$PHP_BIN" artisan key:generate --force
+    fi
+
+    step "Frontend bauen (npm ci + vite build)"
+    as_app npm ci --no-audit --no-fund
+    as_app npm run build
+
+    if [ -s database/database.sqlite ]; then
+        step "Datenbank sichern"
+        local backup
+        backup="$BACKUP_DIR/database-$(date +%Y%m%d-%H%M%S).sqlite"
+        sqlite3 database/database.sqlite ".backup '$backup'"
+        chmod 600 "$backup"
+        info "Sicherung: $backup"
+        find "$BACKUP_DIR" -maxdepth 1 -name 'database-*.sqlite' -printf '%T@ %p\n' |
+            sort -rn | tail -n +"$((KEEP_BACKUPS + 1))" | cut -d' ' -f2- | xargs -r rm -f
+    fi
+
+    step "Datenbank migrieren"
+    as_app "$PHP_BIN" artisan migrate --force
+    if [ "$fresh" = "1" ] && [ "$SEED_DEMO_DATA" = "1" ]; then
+        step "Demodaten einspielen"
+        as_app "$PHP_BIN" artisan db:seed --force
+    fi
+
+    if [ ! -L public/storage ]; then
+        as_app "$PHP_BIN" artisan storage:link
+    fi
+
+    step "Caches aufbauen"
+    as_app "$PHP_BIN" artisan optimize:clear
+    if ! as_app "$PHP_BIN" artisan optimize; then
+        warn "artisan optimize fehlgeschlagen - Routen werden nicht gecacht"
+        as_app "$PHP_BIN" artisan optimize:clear
+        as_app "$PHP_BIN" artisan config:cache
+        as_app "$PHP_BIN" artisan view:cache
+    fi
+
+    step "Berechtigungen setzen"
+    chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+    chmod -R ug+rwX storage bootstrap/cache database
+
+    if systemctl list-unit-files "$PHP_FPM_SERVICE.service" >/dev/null 2>&1; then
+        systemctl reload "$PHP_FPM_SERVICE" || systemctl restart "$PHP_FPM_SERVICE"
+    fi
+
+    if [ "$MAINTENANCE" = "1" ]; then
+        as_app "$PHP_BIN" artisan up
+        MAINTENANCE=0
+    fi
+
+    trap - ERR
+    if command -v curl >/dev/null && systemctl is-active --quiet nginx 2>/dev/null; then
+        if curl -skf -o /dev/null https://localhost/up; then
+            step "Healthcheck OK - Deployment abgeschlossen"
+        else
+            warn "Healthcheck https://localhost/up fehlgeschlagen - siehe $APP_DIR/storage/logs"
+            exit 1
+        fi
+    else
+        step "Deployment abgeschlossen"
+    fi
+}
+
+# Befehle als Webserver-Benutzer ausführen, mit beschreibbarem HOME für die
+# Caches von Composer und npm. Puppeteer wird von recordLoom nicht mehr
+# genutzt; der Chrome-Download würde auf ARM zudem fehlschlagen.
+as_app() {
+    sudo -u "$APP_USER" env \
+        HOME="$APP_HOME" \
+        COMPOSER_HOME="$APP_HOME/composer" \
+        npm_config_cache="$APP_HOME/npm" \
+        PUPPETEER_SKIP_DOWNLOAD=true \
+        "$@"
+}
+
+# env_value KEY VALUE FORCE: setzt KEY in .env (FORCE=1) oder ergänzt ihn nur,
+# wenn er fehlt (FORCE=0).
+env_value() {
+    local key="$1" value="$2" force="$3"
+    if grep -q "^${key}=" .env; then
+        if [ "$force" = "1" ]; then
+            sed -i "s|^${key}=.*|${key}=${value}|" .env
+        fi
+    elif grep -q "^# *${key}=" .env; then
+        sed -i "s|^# *${key}=.*|${key}=${value}|" .env
+    else
+        echo "${key}=${value}" >>.env
+    fi
+}
+
+on_exit() {
+    local rc=$?
+    if [ "${MAINTENANCE:-0}" = "1" ]; then
+        # Bei einem Fehler nicht im Wartungsmodus hängen bleiben.
+        as_app "$PHP_BIN" artisan up || true
+    fi
+    if [ "$rc" -ne 0 ]; then
+        error "Deployment fehlgeschlagen (Exit-Code $rc)"
+    fi
+}
+
+step() { echo -e "\n\e[96m==> $*\e[0m"; }
+info() { echo -e "\e[90m    $*\e[0m"; }
+warn() { echo -e "\e[93m    WARNUNG: $*\e[0m"; }
+error() { echo -e "\e[91mFEHLER: $*\e[0m" >&2; }
+
+main "$@"

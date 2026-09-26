@@ -1,194 +1,116 @@
-# Beschreibung
-Ein paar nützliche Befehle und Skripte für das Aufsetzen vom raspberry pi und deployment einer Laravel-Anwendung von Git
+# deployLaravel
 
-# Setup raspberryPi
-1. Ausführen von raspi-config um das Dateisystem zu erweitern und den GPU Ram zu reduzieren, da der Server Headless betrieben werden soll.
+Skripte, um [recordLoom](https://github.com/leshaze/recordLoom) (Laravel 11,
+SQLite, Vite, dompdf) vollautomatisch auf einem frischen Raspberry Pi
+einzurichten und später zu aktualisieren.
 
-```
-sudo raspi-config -> Advanced Options -> Expand Filesystem
+| Datei          | Zweck                                                                                   |
+| -------------- | --------------------------------------------------------------------------------------- |
+| `installer.sh` | Einmalige Einrichtung des Pi: Pakete, PHP, Composer, Node.js, nginx + HTTPS, Absicherung, danach Deployment |
+| `deploy.sh`    | Installiert/aktualisiert die App (wird als `recordloom-deploy` installiert)             |
 
-sudo raspi-config -> Performance Options -> GPU Memory -> Wert auf 16 ändern
+## Voraussetzungen
 
-```
+- Raspberry Pi 3/4/5 (Zero 2 W geht, der Build dauert aber lange)
+- **Raspberry Pi OS Lite (64-bit)**, Bookworm oder Trixie
+- Im Raspberry Pi Imager unter „Einstellungen bearbeiten“: Hostname
+  (z.B. `recordloom`), Benutzer + Passwort, WLAN und **SSH aktivieren**
+- Internetzugang während der Installation
 
-2. System rebooten und wieder anmelden.
+## Installation
 
-3. Erweitern der Swap-Datei
-```
-sudo su -c 'echo "CONF_SWAPSIZE=1024" > /etc/dphys-swapfile'
-sudo dphys-swapfile setup
-sudo dphys-swapfile swapon
-```
+Pi mit dem Image starten, per SSH anmelden und einen Befehl ausführen:
 
-4. Danach die *installer.sh* Datei ausführen.
-Dadurch werden die SSH-Schlüssel neu generiert, sowie der root SSH-Login deaktiviert. Außerdem werden benötigten Pakete installiert und das System aktualisiert.
-
-
-# Hardening raspberryPi
-Um das System weiter abzusichern empfehlen sich noch folgende Änderungen, diese Änderungen sind aber nur nötig, wenn eine Verbindung ins Internet besteht. 
-
-## Anlegen von einem neuen Benutzer
-
-## Aktivieren und Konfigurieren der Firewall
-
-## Änderungen an SSH
-
-## Installation und Konfigration von fail2ban
-
-# Einrichten von nginx über http. Wenn nur https genommen werden soll, zum nächsten Schritt gehen
-
-Erstellen einer neuen nginx Konfiguration
-```
-sudo nano /etc/nginx/sites-available/recordLoom
-```
-Folgenden Inhalt einfügen wenn https forciert werden soll
-```
-server {
-    listen 443 ssl;
-    server_name recordloom.local;
-    root /var/www/recordLoom/public;
-
-    add_header X-Frame-Options "SAMEORIGIN";
-    add_header X-XSS-Protection "1; mode=block";
-    add_header X-Content-Type-Options "nosniff";
-
-    index index.php index.html index.htm;
-
-    charset utf-8;
-
-    location / {
-        try_files $uri $uri/ /index.php?$query_string;
-    }
-
-    location = /favicon.ico { access_log off; log_not_found off; }
-    location = /robots.txt  { access_log off; log_not_found off; }
-
-    error_page 404 /index.php;
-
-    location ~ \.php$ {
-        fastcgi_pass unix:/var/run/php/php8.3-fpm.sock;
-        fastcgi_index index.php;
-        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
-        include fastcgi_params;
-    }
-
-    location ~ /\.(?!well-known).* {
-        deny all;
-    }
-}
+```bash
+curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/main/installer.sh | sudo bash
 ```
 
-# Einrichten von nginx mit https und selbst signiertem Zertifikat
-Erstellen von einem eigenen Zertifikat
-```
-sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/ssl/private/nginx-selfsigned.key -out /etc/ssl/certs/nginx-selfsigned.crt
+Das Skript läuft ohne Rückfragen durch (je nach Modell 10–30 Minuten) und
+endet mit der Adresse der App, z.B. `https://recordloom.local`. Das
+Zertifikat ist selbst signiert, der Browser zeigt deshalb einmalig eine
+Warnung. Das komplette Protokoll steht in `/var/log/recordloom-install.log`.
 
-sudo openssl dhparam -out /etc/nginx/dhparam.pem 4096
+Alternativ aus einem Klon des Repositories:
 
-```
-
-Anlegen von zwei snipped Dateien für die spätere nginx conf-Datei
-```
-sudo nano /etc/nginx/snippets/self-signed.conf
-```
-wird mit folgendem Inhalt gefüllt. Hiermit wird auf die selbsterstellten Zertifkate verwiesen.
-```
-ssl_certificate /etc/ssl/certs/nginx-selfsigned.crt;
-ssl_certificate_key /etc/ssl/private/nginx-selfsigned.key;
+```bash
+git clone https://github.com/leshaze/deployLaravel.git
+sudo ./deployLaravel/installer.sh
 ```
 
-Jetzt noch die Datei für die ssl-parameter
-```
-sudo nano /etc/nginx/snippets/ssl-params.conf
-```
-mit folgendem Inhalt
-```
-ssl_protocols TLSv1.3;
-ssl_prefer_server_ciphers on;
-ssl_dhparam /etc/nginx/dhparam.pem; 
-ssl_ciphers EECDH+AESGCM:EDH+AESGCM;
-ssl_ecdh_curve secp384r1;
-ssl_session_timeout  10m;
-ssl_session_cache shared:SSL:10m;
-ssl_session_tickets off;
-ssl_stapling on;
-ssl_stapling_verify on;
-resolver 8.8.8.8 8.8.4.4 valid=300s;
-resolver_timeout 5s;
-# Disable strict transport security for now. You can uncomment the following
-# line if you understand the implications.
-#add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload";
-add_header X-Frame-Options DENY;
-add_header X-Content-Type-Options nosniff;
-add_header X-XSS-Protection "1; mode=block";
+### Was der Installer macht
+
+1. System aktualisieren (`apt full-upgrade`), Zeitzone setzen, optional Hostname setzen
+2. Swap auf 1024 MB vergrößern (nur wenn `dphys-swapfile` vorhanden ist, also bis Bookworm)
+3. WLAN-Energiesparmodus über NetworkManager abschalten
+4. PHP 8.2–8.4 aus der Distribution installieren (sonst PHP 8.3 aus dem
+   Sury-Repository) inkl. aller Erweiterungen für Laravel und dompdf,
+   Upload-Limit 16 MB
+5. Composer (Prüfsumme wird online abgeglichen), Node.js und npm installieren
+6. nginx mit HTTPS (selbst signiertes Zertifikat, 10 Jahre gültig) und
+   Umleitung von HTTP auf HTTPS einrichten
+7. Absicherung: Root-Konto sperren, Root-Login per SSH verbieten, Firewall
+   (ufw: SSH, HTTP, HTTPS, mDNS), fail2ban für SSH
+8. `recordloom-deploy` installieren und die App deployen
+
+### Einstellungen
+
+Alle Werte lassen sich per Umgebungsvariable überschreiben:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/main/installer.sh \
+  | sudo APP_HOSTNAME=recordloom SEED_DEMO_DATA=1 bash
 ```
 
-Erstellen einer neuen nginx Konfiguration
-```
-sudo nano /etc/nginx/sites-available/recordLoom
-```
-Folgenden Inhalt einfügen wenn https forciert werden soll
-```
-server {
-    listen 443 ssl;
-    server_name recordloom.local;
-    include snippets/self-signed.conf;
-    include snippets/ssl-params.conf;
-    root /var/www/recordLoom/public;
+| Variable                 | Standard                                     | Bedeutung                                     |
+| ------------------------ | -------------------------------------------- | --------------------------------------------- |
+| `APP_HOSTNAME`           | *(unverändert)*                              | Neuer Hostname → `https://<name>.local`       |
+| `APP_REPO`               | `https://github.com/leshaze/recordLoom.git`  | Git-Repository der App                        |
+| `APP_BRANCH`             | `main`                                       | Branch, der deployt wird                      |
+| `APP_DIR`                | `/var/www/recordLoom`                        | Installationsverzeichnis                      |
+| `APP_TIMEZONE`           | `Europe/Berlin`                              | Zeitzone von System und App                   |
+| `PHP_VERSION`            | *(automatisch)*                              | z.B. `8.3` erzwingen                          |
+| `SWAP_SIZE_MB`           | `1024`                                       | Swap-Größe                                    |
+| `ENABLE_FIREWALL`        | `1`                                          | ufw einrichten                                |
+| `ENABLE_FAIL2BAN`        | `1`                                          | fail2ban einrichten                           |
+| `DISABLE_WIFI_POWERSAVE` | `1`                                          | WLAN-Energiesparen abschalten                 |
+| `REGENERATE_SSH_KEYS`    | `0`                                          | SSH-Hostschlüssel neu erzeugen (Raspberry Pi OS macht das beim ersten Start bereits selbst) |
+| `SEED_DEMO_DATA`         | `0`                                          | Demodaten bei der Erstinstallation einspielen |
 
-    add_header X-Frame-Options "SAMEORIGIN";
-    add_header X-XSS-Protection "1; mode=block";
-    add_header X-Content-Type-Options "nosniff";
+Die für Updates relevanten Werte speichert der Installer in
+`/etc/recordloom/recordloom.conf`.
 
-    index index.php index.html index.htm;
+## Updates
 
-    charset utf-8;
-
-    location / {
-        try_files $uri $uri/ /index.php?$query_string;
-    }
-
-    location = /favicon.ico { access_log off; log_not_found off; }
-    location = /robots.txt  { access_log off; log_not_found off; }
-
-    error_page 404 /index.php;
-
-    location ~ \.php$ {
-        fastcgi_pass unix:/var/run/php/php8.3-fpm.sock;
-        fastcgi_index index.php;
-        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
-        include fastcgi_params;
-    }
-
-    location ~ /\.(?!well-known).* {
-        deny all;
-    }
-}
-server {
- listen 80;
- server_name recordloom.local;
- return 301 https://$server_name$request_uri;
-}
-
-```
-Hinzufügen von einem symbolischen Link
-
-```
-sudo ln -s /etc/nginx/sites-available/recordsarchive /etc/nginx/sites-enabled/
+```bash
+sudo recordloom-deploy
 ```
 
-Entfernen der default Konfiguration
+Das Skript
 
+1. schaltet den Wartungsmodus ein,
+2. setzt den Code auf den Stand von `origin/<branch>` (lokale Änderungen im Code werden verworfen; `.env`, Datenbank und Uploads bleiben erhalten),
+3. führt `composer install --no-dev`, `npm ci` und `npm run build` aus,
+4. sichert die SQLite-Datenbank nach `/var/backups/recordloom/` (die letzten 14 Sicherungen bleiben erhalten),
+5. führt `php artisan migrate --force` aus,
+6. baut die Laravel-Caches neu (`php artisan optimize`), lädt PHP-FPM neu,
+7. beendet den Wartungsmodus – auch wenn ein Schritt fehlschlägt – und prüft `https://localhost/up`.
+
+Alle Befehle laufen als `www-data`, der Besitzer der App-Dateien.
+
+## Nützliches
+
+| Was                         | Wo / Befehl                                        |
+| --------------------------- | -------------------------------------------------- |
+| App-Konfiguration           | `/var/www/recordLoom/.env`                         |
+| Datenbank                   | `/var/www/recordLoom/database/database.sqlite`     |
+| Hochgeladene Bilder         | `/var/www/recordLoom/storage/app/public/images`    |
+| Laravel-Log                 | `/var/www/recordLoom/storage/logs/`                |
+| nginx-Konfiguration         | `/etc/nginx/sites-available/recordloom`            |
+| Datenbank-Sicherungen       | `/var/backups/recordloom/`                         |
+| Sicherung wiederherstellen  | `sudo -u www-data cp /var/backups/recordloom/<datei> /var/www/recordLoom/database/database.sqlite` |
+
+Nach Änderungen an der `.env`:
+
+```bash
+cd /var/www/recordLoom && sudo -u www-data php artisan optimize
 ```
-sudo rm -f /etc/nginx/sites-available/default && sudo rm -f /etc/nginx/sites-enabled/default
-```
-
-Mit  ```sudo nginx -t``` überprüfen ob die Konfigdatei Fehler enthält.
-
-Sind keine Fehler vorhanden muss nginx neugestartet werden.
-```
-sudo systemctl reload nginx
-
-
-# Deployment
-Siehe deploy.sh
