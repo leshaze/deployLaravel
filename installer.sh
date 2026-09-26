@@ -21,15 +21,19 @@ main() {
     # ------------------------------------------------------------------ Config
     APP_NAME="${APP_NAME:-recordLoom}"
     APP_REPO="${APP_REPO:-https://github.com/leshaze/recordLoom.git}"
-    APP_BRANCH="${APP_BRANCH:-main}"
+    APP_BRANCH="${APP_BRANCH:-claude/upgrade-security-0h8wx0}"
     APP_DIR="${APP_DIR:-/var/www/recordLoom}"
     # Neuer Hostname für den Pi (leer = unverändert lassen). Die App ist
     # anschließend unter https://<hostname>.local erreichbar.
     APP_HOSTNAME="${APP_HOSTNAME:-}"
     APP_TIMEZONE="${APP_TIMEZONE:-Europe/Berlin}"
-    # PHP-Version (leer = Version der Distribution, sofern 8.2 - 8.4,
-    # sonst 8.3 aus dem Sury-Repository).
+    # PHP-Version (leer = Version der Distribution, sofern 8.4 oder 8.5,
+    # sonst 8.4 aus dem Sury-Repository). recordLoom (Laravel 13 / Symfony 8)
+    # benötigt PHP >= 8.4.1.
     PHP_VERSION="${PHP_VERSION:-}"
+    # Node.js-Hauptversion aus NodeSource, falls die Distribution kein
+    # Node.js >= 20.19 mitbringt (Vite 8).
+    NODE_MAJOR="${NODE_MAJOR:-22}"
     SWAP_SIZE_MB="${SWAP_SIZE_MB:-1024}"
     ENABLE_FIREWALL="${ENABLE_FIREWALL:-1}"
     ENABLE_FAIL2BAN="${ENABLE_FAIL2BAN:-1}"
@@ -112,8 +116,8 @@ main() {
         local distro_php
         distro_php="$(apt-cache depends php-fpm 2>/dev/null | grep -oP 'php\K[0-9]+\.[0-9]+(?=-fpm)' | head -n1 || true)"
         case "$distro_php" in
-            8.2 | 8.3 | 8.4) PHP_VERSION="$distro_php" ;;
-            *) PHP_VERSION=8.3 ;;
+            8.4 | 8.5) PHP_VERSION="$distro_php" ;;
+            *) PHP_VERSION=8.4 ;;
         esac
     fi
     if ! apt-cache show "php${PHP_VERSION}-fpm" >/dev/null 2>&1; then
@@ -166,11 +170,34 @@ EOF
 
     # ---------------------------------------------------------- Node.js / npm
     step "Node.js und npm installieren"
-    apt_get install nodejs npm
-    local node_major
-    node_major="$(node -p 'process.versions.node.split(".")[0]')"
-    if [ "$node_major" -lt 18 ]; then
-        error "Node.js $node_major ist zu alt (Vite benötigt >= 18)"
+    local node_candidate
+    node_candidate="$(apt-cache policy nodejs 2>/dev/null | awk '/Candidate:/ {print $2}')"
+    if [ -f /etc/apt/sources.list.d/nodesource.list ] ||
+        ! dpkg --compare-versions "${node_candidate:-0}" ge 20.19; then
+        info "Node.js der Distribution (${node_candidate:-keins}) ist zu alt - NodeSource $NODE_MAJOR.x wird eingerichtet"
+        case "$(dpkg --print-architecture)" in
+            arm64 | amd64) ;;
+            *)
+                error "NodeSource unterstützt $(dpkg --print-architecture) nicht - bitte Raspberry Pi OS (64-bit) verwenden"
+                exit 1
+                ;;
+        esac
+        apt_get install gnupg
+        install -d -m 755 /etc/apt/keyrings
+        curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key |
+            gpg --dearmor --yes -o /etc/apt/keyrings/nodesource.gpg
+        echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+            >/etc/apt/sources.list.d/nodesource.list
+        apt_get update
+        # Das nodejs-Paket von NodeSource bringt npm mit und kollidiert mit
+        # dem npm-Paket der Distribution.
+        apt_get purge npm || true
+        apt_get install nodejs
+    else
+        apt_get install nodejs npm
+    fi
+    if ! dpkg --compare-versions "$(node -p 'process.versions.node')" ge 20.19; then
+        error "Node.js $(node -v) ist zu alt (Vite 8 benötigt >= 20.19)"
         exit 1
     fi
     info "Node.js $(node -v), npm $(npm -v)"

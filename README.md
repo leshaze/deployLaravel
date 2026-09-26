@@ -1,7 +1,8 @@
 # deployLaravel
 
-Skripte, um [recordLoom](https://github.com/leshaze/recordLoom) (Laravel 11,
-SQLite, Vite, dompdf) vollautomatisch auf einem frischen Raspberry Pi
+Skripte, um [recordLoom](https://github.com/leshaze/recordLoom) (Laravel 13,
+SQLite, Vite 8, dompdf) – standardmäßig den Branch
+`claude/upgrade-security-0h8wx0` – vollautomatisch auf einem frischen Raspberry Pi
 einzurichten und später zu aktualisieren.
 
 | Datei          | Zweck                                                                                   |
@@ -12,7 +13,10 @@ einzurichten und später zu aktualisieren.
 ## Voraussetzungen
 
 - Raspberry Pi 3/4/5 (Zero 2 W geht, der Build dauert aber lange)
-- **Raspberry Pi OS Lite (64-bit)**, Bookworm oder Trixie
+- **Raspberry Pi OS Lite (64-bit)**, Trixie (empfohlen) oder Bookworm.
+  Unter Bookworm kommen PHP 8.4 aus dem Sury-Repository und Node.js aus
+  NodeSource, da die Distribution nur PHP 8.2 und Node.js 18 enthält;
+  dafür ist die 64-bit-Variante zwingend.
 - Im Raspberry Pi Imager unter „Einstellungen bearbeiten“: Hostname
   (z.B. `recordloom`), Benutzer + Passwort, WLAN und **SSH aktivieren**
 - Internetzugang während der Installation
@@ -42,10 +46,11 @@ sudo ./deployLaravel/installer.sh
 1. System aktualisieren (`apt full-upgrade`), Zeitzone setzen, optional Hostname setzen
 2. Swap auf 1024 MB vergrößern (nur wenn `dphys-swapfile` vorhanden ist, also bis Bookworm)
 3. WLAN-Energiesparmodus über NetworkManager abschalten
-4. PHP 8.2–8.4 aus der Distribution installieren (sonst PHP 8.3 aus dem
-   Sury-Repository) inkl. aller Erweiterungen für Laravel und dompdf,
-   Upload-Limit 16 MB
-5. Composer (Prüfsumme wird online abgeglichen), Node.js und npm installieren
+4. PHP 8.4 installieren (aus der Distribution, sonst aus dem
+   Sury-Repository) inkl. aller Erweiterungen für Laravel, dompdf und die
+   Cover-Vorschaubilder (gd), Upload-Limit 16 MB
+5. Composer (Prüfsumme wird online abgeglichen) und Node.js ≥ 20.19 mit npm
+   installieren (aus der Distribution, sonst NodeSource 22.x)
 6. nginx mit HTTPS (selbst signiertes Zertifikat, 10 Jahre gültig) und
    Umleitung von HTTP auf HTTPS einrichten
 7. Absicherung: Root-Konto sperren, Root-Login per SSH verbieten, Firewall
@@ -65,10 +70,11 @@ curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/main/installe
 | ------------------------ | -------------------------------------------- | --------------------------------------------- |
 | `APP_HOSTNAME`           | *(unverändert)*                              | Neuer Hostname → `https://<name>.local`       |
 | `APP_REPO`               | `https://github.com/leshaze/recordLoom.git`  | Git-Repository der App                        |
-| `APP_BRANCH`             | `main`                                       | Branch, der deployt wird                      |
+| `APP_BRANCH`             | `claude/upgrade-security-0h8wx0`             | Branch, der deployt wird                      |
 | `APP_DIR`                | `/var/www/recordLoom`                        | Installationsverzeichnis                      |
 | `APP_TIMEZONE`           | `Europe/Berlin`                              | Zeitzone von System und App                   |
-| `PHP_VERSION`            | *(automatisch)*                              | z.B. `8.3` erzwingen                          |
+| `PHP_VERSION`            | *(automatisch)*                              | z.B. `8.5` erzwingen (mindestens 8.4)         |
+| `NODE_MAJOR`             | `22`                                         | NodeSource-Version, falls nötig               |
 | `SWAP_SIZE_MB`           | `1024`                                       | Swap-Größe                                    |
 | `ENABLE_FIREWALL`        | `1`                                          | ufw einrichten                                |
 | `ENABLE_FAIL2BAN`        | `1`                                          | fail2ban einrichten                           |
@@ -103,7 +109,7 @@ Alle Befehle laufen als `www-data`, der Besitzer der App-Dateien.
 | --------------------------- | -------------------------------------------------- |
 | App-Konfiguration           | `/var/www/recordLoom/.env`                         |
 | Datenbank                   | `/var/www/recordLoom/database/database.sqlite`     |
-| Hochgeladene Bilder         | `/var/www/recordLoom/storage/app/public/images`    |
+| Cover-Bilder                | `/var/www/recordLoom/storage/app/private/covers`   |
 | Laravel-Log                 | `/var/www/recordLoom/storage/logs/`                |
 | nginx-Konfiguration         | `/etc/nginx/sites-available/recordloom`            |
 | Datenbank-Sicherungen       | `/var/backups/recordloom/`                         |

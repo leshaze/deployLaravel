@@ -19,7 +19,7 @@ main() {
     fi
     APP_NAME="${APP_NAME:-recordLoom}"
     APP_REPO="${APP_REPO:-https://github.com/leshaze/recordLoom.git}"
-    APP_BRANCH="${APP_BRANCH:-main}"
+    APP_BRANCH="${APP_BRANCH:-claude/upgrade-security-0h8wx0}"
     APP_DIR="${APP_DIR:-/var/www/recordLoom}"
     APP_TIMEZONE="${APP_TIMEZONE:-Europe/Berlin}"
     PHP_VERSION="${PHP_VERSION:-}"
@@ -95,6 +95,7 @@ main() {
     env_value APP_DEBUG false "$new_env"
     env_value APP_URL "https://${host}.local" "$new_env"
     env_value APP_TIMEZONE "$APP_TIMEZONE" "$new_env"
+    env_value APP_LOCALE de "$new_env"
     env_value LOG_CHANNEL stack "$new_env"
     env_value LOG_STACK daily "$new_env"
     env_value LOG_DAILY_DAYS 14 "$new_env"
