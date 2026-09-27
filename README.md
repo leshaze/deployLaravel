@@ -1,8 +1,7 @@
 # deployLaravel
 
 Skripte, um [recordLoom](https://github.com/leshaze/recordLoom) (Laravel 13,
-SQLite, Vite 8, dompdf) – standardmäßig den Branch
-`claude/upgrade-security-0h8wx0` – vollautomatisch auf einem frischen Raspberry Pi
+SQLite, Vite 8, dompdf) vollautomatisch auf einem frischen Raspberry Pi
 einzurichten und später zu aktualisieren.
 
 | Datei          | Zweck                                                                                   |
@@ -94,7 +93,7 @@ curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/main/installe
 | ------------------------ | -------------------------------------------- | --------------------------------------------- |
 | `APP_HOSTNAME`           | *(unverändert)*                              | Neuer Hostname → `https://<name>.local`       |
 | `APP_REPO`               | `https://github.com/leshaze/recordLoom.git`  | Git-Repository der App                        |
-| `APP_BRANCH`             | `claude/upgrade-security-0h8wx0`             | Branch, der deployt wird                      |
+| `APP_BRANCH`             | `main`                                       | Branch, der deployt wird (existiert er nicht mehr, wird `main` genommen) |
 | `APP_DIR`                | `/var/www/recordLoom`                        | Installationsverzeichnis                      |
 | `APP_TIMEZONE`           | `Europe/Berlin`                              | Zeitzone von System und App                   |
 | `PHP_VERSION`            | *(automatisch)*                              | z.B. `8.5` erzwingen (mindestens 8.4)         |
@@ -123,10 +122,42 @@ Das Skript
 3. führt `composer install --no-dev`, `npm ci` und `npm run build` aus,
 4. sichert die SQLite-Datenbank nach `/var/backups/recordloom/` (die letzten 14 Sicherungen bleiben erhalten),
 5. führt `php artisan migrate --force` aus,
-6. baut die Laravel-Caches neu (`php artisan optimize`), lädt PHP-FPM neu,
+6. baut die Laravel-Caches neu (`php artisan optimize`), richtet den Cronjob
+   für den Laravel-Scheduler ein (`/etc/cron.d/recordloom`, siehe unten) und
+   lädt PHP-FPM neu,
 7. beendet den Wartungsmodus – auch wenn ein Schritt fehlschlägt – und prüft `https://localhost/up`.
 
 Alle Befehle laufen als `www-data`, der Besitzer der App-Dateien.
+
+## Scheduler (Mail-Backup, Discogs-Preise)
+
+`recordloom-deploy` legt `/etc/cron.d/recordloom` an. Der Cronjob startet
+jede Minute `php artisan schedule:run` als `www-data`:
+
+```
+* * * * * www-data cd /var/www/recordLoom && /usr/bin/php artisan schedule:run >> /dev/null 2>&1
+```
+
+Wie oft die Aufgaben tatsächlich laufen, legt recordLoom über die `.env`
+fest. recordLoom prüft alle 15 Minuten, ob sie fällig sind, und holt
+verpasste Läufe nach (z.B. wenn der Pi aus war):
+
+| Variable                       | Standard | Bedeutung                                              |
+| ------------------------------ | -------- | ------------------------------------------------------ |
+| `BACKUP_INTERVAL_DAYS`         | `7`      | Abstand der Mail-Backups der Datenbank in Tagen        |
+| `DISCOGS_PRICE_INTERVAL_HOURS` | `24`     | Abstand des Discogs-Preisabgleichs in Stunden          |
+
+`recordloom-deploy` trägt beide Werte in die `.env` ein, falls sie fehlen.
+Vorhandene Werte werden nicht überschrieben.
+
+Damit das Backup verschickt wird, müssen in der `.env` eine funktionierende
+Mail-Konfiguration (`MAIL_MAILER`, `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`,
+`MAIL_PASSWORD`, `MAIL_FROM_ADDRESS`) und `BACKUP_MAIL_TO` gesetzt sein, für
+den Discogs-Abgleich `DISCOGS_TOKEN`. Testen lässt sich das Backup mit:
+
+```bash
+cd /var/www/recordLoom && sudo -u www-data php artisan backup:mail --force
+```
 
 ## Nützliches
 

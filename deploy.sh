@@ -14,12 +14,16 @@ main() {
     exec </dev/null
 
     if [ -f /etc/recordloom/recordloom.conf ]; then
+        # Umgebungsvariablen haben Vorrang vor der Konfigurationsdatei.
+        local overrides
+        overrides="$(export -p | grep -E '^declare -x (APP_[A-Z_]+|PHP_VERSION|NODE_MIN|SEED_DEMO_DATA|KEEP_BACKUPS)=' || true)"
         # shellcheck disable=SC1091
         . /etc/recordloom/recordloom.conf
+        eval "$overrides"
     fi
     APP_NAME="${APP_NAME:-recordLoom}"
     APP_REPO="${APP_REPO:-https://github.com/leshaze/recordLoom.git}"
-    APP_BRANCH="${APP_BRANCH:-claude/upgrade-security-0h8wx0}"
+    APP_BRANCH="${APP_BRANCH:-main}"
     APP_DIR="${APP_DIR:-/var/www/recordLoom}"
     APP_TIMEZONE="${APP_TIMEZONE:-Europe/Berlin}"
     PHP_VERSION="${PHP_VERSION:-}"
@@ -51,6 +55,15 @@ main() {
     MAINTENANCE=0
     trap on_exit EXIT
     trap 'error "Abbruch in Zeile $LINENO (Befehl: $BASH_COMMAND)"' ERR
+
+    # Gemergte Feature-Branches werden gelöscht - dann auf main zurückfallen.
+    if [ "$APP_BRANCH" != main ] && ! git ls-remote --exit-code --heads "$APP_REPO" "$APP_BRANCH" >/dev/null 2>&1; then
+        warn "Branch $APP_BRANCH existiert nicht mehr - verwende main"
+        APP_BRANCH=main
+        if [ -f /etc/recordloom/recordloom.conf ]; then
+            sed -i 's|^APP_BRANCH=.*|APP_BRANCH="main"|' /etc/recordloom/recordloom.conf
+        fi
+    fi
 
     step "Deployment von $APP_NAME ($APP_BRANCH) nach $APP_DIR"
     local fresh=0
@@ -121,6 +134,9 @@ main() {
     env_value QUEUE_CONNECTION sync "$new_env"
     env_value FILESYSTEM_DISK local "$new_env"
     env_value BROADCAST_CONNECTION log "$new_env"
+    # Intervalle des Schedulers von recordLoom (Mail-Backup, Discogs-Preise)
+    env_value BACKUP_INTERVAL_DAYS 7 "$new_env"
+    env_value DISCOGS_PRICE_INTERVAL_HOURS 24 "$new_env"
     chown "$APP_USER:$APP_USER" .env
     chmod 640 .env
 
@@ -174,6 +190,20 @@ main() {
     step "Berechtigungen setzen"
     chown -R "$APP_USER:$APP_USER" "$APP_DIR"
     chmod -R ug+rwX storage bootstrap/cache database
+
+    step "Scheduler-Cronjob einrichten"
+    # Läuft als Webserver-Benutzer, damit Caches und Logs nicht root gehören.
+    if [ -d /etc/cron.d ]; then
+        cat >/etc/cron.d/recordloom <<EOF
+# Generiert von deployLaravel/deploy.sh - Laravel Scheduler von $APP_NAME
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+* * * * * $APP_USER cd $APP_DIR && $(command -v "$PHP_BIN") artisan schedule:run >> /dev/null 2>&1
+EOF
+        chmod 644 /etc/cron.d/recordloom
+    else
+        warn "/etc/cron.d fehlt (cron nicht installiert) - Scheduler nicht eingerichtet"
+    fi
 
     if systemctl list-unit-files "$PHP_FPM_SERVICE.service" >/dev/null 2>&1; then
         systemctl reload "$PHP_FPM_SERVICE" || systemctl restart "$PHP_FPM_SERVICE"
