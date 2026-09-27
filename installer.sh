@@ -21,7 +21,7 @@ main() {
     # ------------------------------------------------------------------ Config
     APP_NAME="${APP_NAME:-recordLoom}"
     APP_REPO="${APP_REPO:-https://github.com/leshaze/recordLoom.git}"
-    APP_BRANCH="${APP_BRANCH:-claude/upgrade-security-0h8wx0}"
+    APP_BRANCH="${APP_BRANCH:-main}"
     APP_DIR="${APP_DIR:-/var/www/recordLoom}"
     # Neuer Hostname für den Pi (leer = unverändert lassen). Die App ist
     # anschließend unter https://<hostname>.local erreichbar.
@@ -357,6 +357,7 @@ APP_TIMEZONE="$APP_TIMEZONE"
 PHP_VERSION="$PHP_VERSION"
 NODE_MIN="$NODE_MIN"
 SEED_DEMO_DATA="$SEED_DEMO_DATA"
+SCHEDULE_CRON="${SCHEDULE_CRON:-23 4 * * 0}"
 EOF
     local script_dir=""
     if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then

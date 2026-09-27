@@ -19,11 +19,15 @@ main() {
     fi
     APP_NAME="${APP_NAME:-recordLoom}"
     APP_REPO="${APP_REPO:-https://github.com/leshaze/recordLoom.git}"
-    APP_BRANCH="${APP_BRANCH:-claude/upgrade-security-0h8wx0}"
+    APP_BRANCH="${APP_BRANCH:-main}"
     APP_DIR="${APP_DIR:-/var/www/recordLoom}"
     APP_TIMEZONE="${APP_TIMEZONE:-Europe/Berlin}"
     PHP_VERSION="${PHP_VERSION:-}"
     SEED_DEMO_DATA="${SEED_DEMO_DATA:-0}"
+    # Zeitpunkt für "php artisan schedule:run" (Cron-Syntax). Der Scheduler
+    # führt nur Aufgaben aus, die genau zu dieser Minute fällig sind -
+    # Standard ist der wöchentliche Mail-Backup von recordLoom (So 04:23).
+    SCHEDULE_CRON="${SCHEDULE_CRON:-23 4 * * 0}"
     APP_USER="${APP_USER:-www-data}"
     APP_HOME=/var/lib/recordloom
     BACKUP_DIR=/var/backups/recordloom
@@ -51,6 +55,15 @@ main() {
     MAINTENANCE=0
     trap on_exit EXIT
     trap 'error "Abbruch in Zeile $LINENO (Befehl: $BASH_COMMAND)"' ERR
+
+    # Gemergte Feature-Branches werden gelöscht - dann auf main zurückfallen.
+    if [ "$APP_BRANCH" != main ] && ! git ls-remote --exit-code --heads "$APP_REPO" "$APP_BRANCH" >/dev/null 2>&1; then
+        warn "Branch $APP_BRANCH existiert nicht mehr - verwende main"
+        APP_BRANCH=main
+        if [ -f /etc/recordloom/recordloom.conf ]; then
+            sed -i 's|^APP_BRANCH=.*|APP_BRANCH="main"|' /etc/recordloom/recordloom.conf
+        fi
+    fi
 
     step "Deployment von $APP_NAME ($APP_BRANCH) nach $APP_DIR"
     local fresh=0
@@ -182,7 +195,7 @@ main() {
 # Generiert von deployLaravel/deploy.sh - Laravel Scheduler von $APP_NAME
 SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-* * * * * $APP_USER cd $APP_DIR && $(command -v "$PHP_BIN") artisan schedule:run >> /dev/null 2>&1
+$SCHEDULE_CRON $APP_USER cd $APP_DIR && $(command -v "$PHP_BIN") artisan schedule:run >> /dev/null 2>&1
 EOF
         chmod 644 /etc/cron.d/recordloom
     else
