@@ -175,6 +175,20 @@ main() {
     chown -R "$APP_USER:$APP_USER" "$APP_DIR"
     chmod -R ug+rwX storage bootstrap/cache database
 
+    step "Scheduler-Cronjob einrichten"
+    # Läuft als Webserver-Benutzer, damit Caches und Logs nicht root gehören.
+    if [ -d /etc/cron.d ]; then
+        cat >/etc/cron.d/recordloom <<EOF
+# Generiert von deployLaravel/deploy.sh - Laravel Scheduler von $APP_NAME
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+* * * * * $APP_USER cd $APP_DIR && $(command -v "$PHP_BIN") artisan schedule:run >> /dev/null 2>&1
+EOF
+        chmod 644 /etc/cron.d/recordloom
+    else
+        warn "/etc/cron.d fehlt (cron nicht installiert) - Scheduler nicht eingerichtet"
+    fi
+
     if systemctl list-unit-files "$PHP_FPM_SERVICE.service" >/dev/null 2>&1; then
         systemctl reload "$PHP_FPM_SERVICE" || systemctl restart "$PHP_FPM_SERVICE"
     fi

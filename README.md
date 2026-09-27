@@ -123,7 +123,9 @@ Das Skript
 3. führt `composer install --no-dev`, `npm ci` und `npm run build` aus,
 4. sichert die SQLite-Datenbank nach `/var/backups/recordloom/` (die letzten 14 Sicherungen bleiben erhalten),
 5. führt `php artisan migrate --force` aus,
-6. baut die Laravel-Caches neu (`php artisan optimize`), lädt PHP-FPM neu,
+6. baut die Laravel-Caches neu (`php artisan optimize`), richtet den Cronjob
+   für den Laravel-Scheduler ein (`/etc/cron.d/recordloom`, jede Minute
+   `php artisan schedule:run` als `www-data`) und lädt PHP-FPM neu,
 7. beendet den Wartungsmodus – auch wenn ein Schritt fehlschlägt – und prüft `https://localhost/up`.
 
 Alle Befehle laufen als `www-data`, der Besitzer der App-Dateien.

@@ -69,7 +69,8 @@ main() {
     step "System aktualisieren"
     apt_get update
     apt_get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold full-upgrade
-    apt_get install ca-certificates curl git unzip openssl sqlite3 lsb-release avahi-daemon iw
+    apt_get install ca-certificates curl git unzip openssl sqlite3 lsb-release avahi-daemon iw cron
+    systemctl enable --now cron
 
     # ------------------------------------------------------- Hostname/Zeitzone
     if [ -n "$APP_HOSTNAME" ] && [ "$(hostname)" != "$APP_HOSTNAME" ]; then
