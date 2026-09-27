@@ -94,7 +94,6 @@ curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/main/installe
 | `APP_HOSTNAME`           | *(unverändert)*                              | Neuer Hostname → `https://<name>.local`       |
 | `APP_REPO`               | `https://github.com/leshaze/recordLoom.git`  | Git-Repository der App                        |
 | `APP_BRANCH`             | `main`                                       | Branch, der deployt wird (existiert er nicht mehr, wird `main` genommen) |
-| `SCHEDULE_CRON`          | `23 4 * * 0`                                 | Wann `php artisan schedule:run` läuft (Cron-Syntax) |
 | `APP_DIR`                | `/var/www/recordLoom`                        | Installationsverzeichnis                      |
 | `APP_TIMEZONE`           | `Europe/Berlin`                              | Zeitzone von System und App                   |
 | `PHP_VERSION`            | *(automatisch)*                              | z.B. `8.5` erzwingen (mindestens 8.4)         |
@@ -130,22 +129,31 @@ Das Skript
 
 Alle Befehle laufen als `www-data`, der Besitzer der App-Dateien.
 
-## Scheduler (wöchentliches Mail-Backup)
+## Scheduler (Mail-Backup, Discogs-Preise)
 
 `recordloom-deploy` legt `/etc/cron.d/recordloom` an. Der Cronjob startet
-einmal pro Woche (Sonntag 04:23) `php artisan schedule:run` als `www-data`.
+jede Minute `php artisan schedule:run` als `www-data`:
 
-Laravel führt dabei nur Aufgaben aus, die **genau zu dieser Minute** fällig
-sind. Der Zeitpunkt passt deshalb zum wöchentlichen Mail-Backup von
-recordLoom (`backup:mail`, sonntags 04:23). Der optionale nächtliche
-Discogs-Preisabgleich (`discogs:update-prices`, täglich 03:17) läuft mit
-diesem Rhythmus **nicht**. Wer ihn nutzen will, setzt `SCHEDULE_CRON` auf
-`* * * * *` (jede Minute) und führt `sudo recordloom-deploy` aus.
+```
+* * * * * www-data cd /var/www/recordLoom && /usr/bin/php artisan schedule:run >> /dev/null 2>&1
+```
+
+Wie oft die Aufgaben tatsächlich laufen, legt recordLoom über die `.env`
+fest. recordLoom prüft alle 15 Minuten, ob sie fällig sind, und holt
+verpasste Läufe nach (z.B. wenn der Pi aus war):
+
+| Variable                       | Standard | Bedeutung                                              |
+| ------------------------------ | -------- | ------------------------------------------------------ |
+| `BACKUP_INTERVAL_DAYS`         | `7`      | Abstand der Mail-Backups der Datenbank in Tagen        |
+| `DISCOGS_PRICE_INTERVAL_HOURS` | `24`     | Abstand des Discogs-Preisabgleichs in Stunden          |
+
+`recordloom-deploy` trägt beide Werte in die `.env` ein, falls sie fehlen.
+Vorhandene Werte werden nicht überschrieben.
 
 Damit das Backup verschickt wird, müssen in der `.env` eine funktionierende
 Mail-Konfiguration (`MAIL_MAILER`, `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`,
-`MAIL_PASSWORD`, `MAIL_FROM_ADDRESS`) und `BACKUP_MAIL_TO` gesetzt sein.
-Testen lässt sich das mit:
+`MAIL_PASSWORD`, `MAIL_FROM_ADDRESS`) und `BACKUP_MAIL_TO` gesetzt sein, für
+den Discogs-Abgleich `DISCOGS_TOKEN`. Testen lässt sich das Backup mit:
 
 ```bash
 cd /var/www/recordLoom && sudo -u www-data php artisan backup:mail --force

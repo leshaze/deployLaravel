@@ -357,7 +357,6 @@ APP_TIMEZONE="$APP_TIMEZONE"
 PHP_VERSION="$PHP_VERSION"
 NODE_MIN="$NODE_MIN"
 SEED_DEMO_DATA="$SEED_DEMO_DATA"
-SCHEDULE_CRON="${SCHEDULE_CRON:-23 4 * * 0}"
 EOF
     local script_dir=""
     if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then

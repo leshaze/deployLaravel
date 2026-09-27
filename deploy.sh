@@ -14,8 +14,12 @@ main() {
     exec </dev/null
 
     if [ -f /etc/recordloom/recordloom.conf ]; then
+        # Umgebungsvariablen haben Vorrang vor der Konfigurationsdatei.
+        local overrides
+        overrides="$(export -p | grep -E '^declare -x (APP_[A-Z_]+|PHP_VERSION|NODE_MIN|SEED_DEMO_DATA|KEEP_BACKUPS)=' || true)"
         # shellcheck disable=SC1091
         . /etc/recordloom/recordloom.conf
+        eval "$overrides"
     fi
     APP_NAME="${APP_NAME:-recordLoom}"
     APP_REPO="${APP_REPO:-https://github.com/leshaze/recordLoom.git}"
@@ -24,10 +28,6 @@ main() {
     APP_TIMEZONE="${APP_TIMEZONE:-Europe/Berlin}"
     PHP_VERSION="${PHP_VERSION:-}"
     SEED_DEMO_DATA="${SEED_DEMO_DATA:-0}"
-    # Zeitpunkt für "php artisan schedule:run" (Cron-Syntax). Der Scheduler
-    # führt nur Aufgaben aus, die genau zu dieser Minute fällig sind -
-    # Standard ist der wöchentliche Mail-Backup von recordLoom (So 04:23).
-    SCHEDULE_CRON="${SCHEDULE_CRON:-23 4 * * 0}"
     APP_USER="${APP_USER:-www-data}"
     APP_HOME=/var/lib/recordloom
     BACKUP_DIR=/var/backups/recordloom
@@ -134,6 +134,9 @@ main() {
     env_value QUEUE_CONNECTION sync "$new_env"
     env_value FILESYSTEM_DISK local "$new_env"
     env_value BROADCAST_CONNECTION log "$new_env"
+    # Intervalle des Schedulers von recordLoom (Mail-Backup, Discogs-Preise)
+    env_value BACKUP_INTERVAL_DAYS 7 "$new_env"
+    env_value DISCOGS_PRICE_INTERVAL_HOURS 24 "$new_env"
     chown "$APP_USER:$APP_USER" .env
     chmod 640 .env
 
@@ -195,7 +198,7 @@ main() {
 # Generiert von deployLaravel/deploy.sh - Laravel Scheduler von $APP_NAME
 SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-$SCHEDULE_CRON $APP_USER cd $APP_DIR && $(command -v "$PHP_BIN") artisan schedule:run >> /dev/null 2>&1
+* * * * * $APP_USER cd $APP_DIR && $(command -v "$PHP_BIN") artisan schedule:run >> /dev/null 2>&1
 EOF
         chmod 644 /etc/cron.d/recordloom
     else
