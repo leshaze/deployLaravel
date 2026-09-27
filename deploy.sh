@@ -41,6 +41,10 @@ main() {
         command -v "$tool" >/dev/null || { error "$tool fehlt - bitte zuerst installer.sh ausführen"; exit 1; }
     done
 
+    if ! dpkg --compare-versions "$(node -p 'process.versions.node')" ge "${NODE_MIN:-22.12}"; then
+        warn "Node.js $(node -v) ist älter als ${NODE_MIN:-22.12} - bitte installer.sh erneut ausführen"
+    fi
+
     install -d -o "$APP_USER" -g "$APP_USER" -m 750 "$APP_HOME"
     install -d -o root -g root -m 700 "$BACKUP_DIR"
 
