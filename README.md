@@ -14,8 +14,9 @@ einzurichten und später zu aktualisieren.
 
 - Raspberry Pi 3/4/5 (Zero 2 W geht, der Build dauert aber lange)
 - **Raspberry Pi OS Lite (64-bit)**, Trixie (empfohlen) oder Bookworm.
-  Unter Bookworm kommen PHP 8.4 aus dem Sury-Repository und Node.js aus
-  NodeSource, da die Distribution nur PHP 8.2 und Node.js 18 enthält;
+  Unter Bookworm kommt PHP 8.4 aus dem Sury-Repository, da die
+  Distribution nur PHP 8.2 enthält. Node.js 22 kommt unter beiden aus
+  NodeSource (Bookworm hat Node.js 18, Trixie Node.js 20);
   dafür ist die 64-bit-Variante zwingend.
 - Im Raspberry Pi Imager unter „Einstellungen bearbeiten“: Hostname
   (z.B. `recordloom`), Benutzer + Passwort, WLAN und **SSH aktivieren**
@@ -41,24 +42,28 @@ git clone https://github.com/leshaze/deployLaravel.git
 sudo ./deployLaravel/installer.sh
 ```
 
-### Installation aus einem anderen Branch
+### Installation aus einem anderen Branch von deployLaravel
 
-Solange die Skripte noch nicht in `main` gemergt sind, muss der Branch
-explizit angegeben werden – sowohl für `installer.sh` als auch für das
-`deploy.sh`, das der Installer nachlädt (ohne `DEPLOY_SCRIPT_URL` würde er
-das `deploy.sh` aus `main` holen):
+Um die Skripte aus einem anderen Branch als `main` zu verwenden (z.B. zum
+Testen von Änderungen), muss der Branch sowohl für `installer.sh` als auch
+für das `deploy.sh` angegeben werden, das der Installer nachlädt (ohne
+`DEPLOY_SCRIPT_URL` würde er das `deploy.sh` aus `main` holen).
+`<branch>` durch den Namen des Branches ersetzen:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/claude/deploylaravel-audit-e8zxo2/installer.sh | sudo DEPLOY_SCRIPT_URL=https://raw.githubusercontent.com/leshaze/deployLaravel/claude/deploylaravel-audit-e8zxo2/deploy.sh bash
+curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/<branch>/installer.sh | sudo DEPLOY_SCRIPT_URL=https://raw.githubusercontent.com/leshaze/deployLaravel/<branch>/deploy.sh bash
 ```
 
 Aus einem Klon ist das nicht nötig, dort wird das `deploy.sh` neben dem
 Installer verwendet:
 
 ```bash
-git clone -b claude/deploylaravel-audit-e8zxo2 https://github.com/leshaze/deployLaravel.git
+git clone -b <branch> https://github.com/leshaze/deployLaravel.git
 sudo ./deployLaravel/installer.sh
 ```
+
+Welcher Branch von **recordLoom** deployt wird, legt dagegen `APP_BRANCH`
+fest (siehe Einstellungen).
 
 ### Was der Installer macht
 
@@ -68,7 +73,7 @@ sudo ./deployLaravel/installer.sh
 4. PHP 8.4 installieren (aus der Distribution, sonst aus dem
    Sury-Repository) inkl. aller Erweiterungen für Laravel, dompdf und die
    Cover-Vorschaubilder (gd), Upload-Limit 16 MB
-5. Composer (Prüfsumme wird online abgeglichen) und Node.js ≥ 20.19 mit npm
+5. Composer (Prüfsumme wird online abgeglichen) und Node.js ≥ 22.12 mit npm
    installieren (aus der Distribution, sonst NodeSource 22.x)
 6. nginx mit HTTPS (selbst signiertes Zertifikat, 10 Jahre gültig) und
    Umleitung von HTTP auf HTTPS einrichten
@@ -94,6 +99,7 @@ curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/main/installe
 | `APP_TIMEZONE`           | `Europe/Berlin`                              | Zeitzone von System und App                   |
 | `PHP_VERSION`            | *(automatisch)*                              | z.B. `8.5` erzwingen (mindestens 8.4)         |
 | `NODE_MAJOR`             | `22`                                         | NodeSource-Version, falls nötig               |
+| `NODE_MIN`               | `22.12`                                      | Mindestversion von Node.js                    |
 | `SWAP_SIZE_MB`           | `1024`                                       | Swap-Größe                                    |
 | `ENABLE_FIREWALL`        | `1`                                          | ufw einrichten                                |
 | `ENABLE_FAIL2BAN`        | `1`                                          | fail2ban einrichten                           |
@@ -113,7 +119,7 @@ sudo recordloom-deploy
 Das Skript
 
 1. schaltet den Wartungsmodus ein,
-2. setzt den Code auf den Stand von `origin/<branch>` (lokale Änderungen im Code werden verworfen; `.env`, Datenbank und Uploads bleiben erhalten),
+2. setzt den Code auf den Stand von `origin/<branch>`; lokale Änderungen im Code werden vorher als Patch nach `/var/backups/recordloom/` gesichert und dann verworfen (`.env`, Datenbank und Uploads bleiben erhalten),
 3. führt `composer install --no-dev`, `npm ci` und `npm run build` aus,
 4. sichert die SQLite-Datenbank nach `/var/backups/recordloom/` (die letzten 14 Sicherungen bleiben erhalten),
 5. führt `php artisan migrate --force` aus,

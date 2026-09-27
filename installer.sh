@@ -32,8 +32,10 @@ main() {
     # benötigt PHP >= 8.4.1.
     PHP_VERSION="${PHP_VERSION:-}"
     # Node.js-Hauptversion aus NodeSource, falls die Distribution kein
-    # Node.js >= 20.19 mitbringt (Vite 8).
+    # Node.js >= NODE_MIN mitbringt. Vite 8 läuft ab 20.19, einzelne
+    # Pakete von recordLoom (concurrently) verlangen aber Node.js 22.
     NODE_MAJOR="${NODE_MAJOR:-22}"
+    NODE_MIN="${NODE_MIN:-22.12}"
     SWAP_SIZE_MB="${SWAP_SIZE_MB:-1024}"
     ENABLE_FIREWALL="${ENABLE_FIREWALL:-1}"
     ENABLE_FAIL2BAN="${ENABLE_FAIL2BAN:-1}"
@@ -178,7 +180,7 @@ EOF
     local node_candidate
     node_candidate="$(apt-cache policy nodejs 2>/dev/null | awk '/Candidate:/ {print $2}')"
     if [ -f /etc/apt/sources.list.d/nodesource.list ] ||
-        ! dpkg --compare-versions "${node_candidate:-0}" ge 20.19; then
+        ! dpkg --compare-versions "${node_candidate:-0}" ge "$NODE_MIN"; then
         info "Node.js der Distribution (${node_candidate:-keins}) ist zu alt - NodeSource $NODE_MAJOR.x wird eingerichtet"
         case "$(dpkg --print-architecture)" in
             arm64 | amd64) ;;
@@ -198,11 +200,12 @@ EOF
         # dem npm-Paket der Distribution.
         apt_get purge npm || true
         apt_get install nodejs
+        apt_get autoremove --purge
     else
         apt_get install nodejs npm
     fi
-    if ! dpkg --compare-versions "$(node -p 'process.versions.node')" ge 20.19; then
-        error "Node.js $(node -v) ist zu alt (Vite 8 benötigt >= 20.19)"
+    if ! dpkg --compare-versions "$(node -p 'process.versions.node')" ge "$NODE_MIN"; then
+        error "Node.js $(node -v) ist zu alt (benötigt wird >= $NODE_MIN)"
         exit 1
     fi
     info "Node.js $(node -v), npm $(npm -v)"

@@ -41,6 +41,10 @@ main() {
         command -v "$tool" >/dev/null || { error "$tool fehlt - bitte zuerst installer.sh ausführen"; exit 1; }
     done
 
+    if ! dpkg --compare-versions "$(node -p 'process.versions.node')" ge "${NODE_MIN:-22.12}"; then
+        warn "Node.js $(node -v) ist älter als ${NODE_MIN:-22.12} - bitte installer.sh erneut ausführen"
+    fi
+
     install -d -o "$APP_USER" -g "$APP_USER" -m 750 "$APP_HOME"
     install -d -o root -g root -m 700 "$BACKUP_DIR"
 
@@ -75,7 +79,17 @@ main() {
         step "Neuesten Stand holen"
         as_app git remote set-url origin "$APP_REPO"
         as_app git fetch --prune origin "$APP_BRANCH"
-        as_app git checkout -B "$APP_BRANCH" "origin/$APP_BRANCH"
+        # Lokale Änderungen am Code würden den Checkout blockieren. Sie werden
+        # gesichert und verworfen, damit exakt der Stand aus Git läuft.
+        if [ -n "$(as_app git status --porcelain --untracked-files=no)" ]; then
+            local changes
+            changes="$BACKUP_DIR/local-changes-$(date +%Y%m%d-%H%M%S).patch"
+            as_app git diff HEAD >"$changes"
+            chmod 600 "$changes"
+            warn "Lokale Änderungen im Code werden verworfen (gesichert in $changes):"
+            as_app git status --short --untracked-files=no | sed 's/^/      /'
+        fi
+        as_app git checkout --force -B "$APP_BRANCH" "origin/$APP_BRANCH"
         as_app git reset --hard "origin/$APP_BRANCH"
     fi
     info "Stand: $(as_app git log -1 --format='%h %s (%ci)')"
