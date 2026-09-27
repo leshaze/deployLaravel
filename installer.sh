@@ -130,8 +130,13 @@ main() {
         apt_get update
     fi
     info "Verwende PHP $PHP_VERSION"
-    local php_pkgs=(fpm cli common sqlite3 mbstring xml curl zip gd bcmath intl opcache)
-    apt_get install "${php_pkgs[@]/#/php${PHP_VERSION}-}"
+    local php_pkgs=(fpm cli common sqlite3 mbstring xml curl zip gd bcmath intl)
+    php_pkgs=("${php_pkgs[@]/#/php${PHP_VERSION}-}")
+    # Ab PHP 8.5 ist OPcache fest eingebaut und kein eigenes Paket mehr.
+    if apt-cache show "php${PHP_VERSION}-opcache" >/dev/null 2>&1; then
+        php_pkgs+=("php${PHP_VERSION}-opcache")
+    fi
+    apt_get install "${php_pkgs[@]}"
     update-alternatives --set php "/usr/bin/php${PHP_VERSION}" >/dev/null 2>&1 || true
 
     cat >"/etc/php/${PHP_VERSION}/fpm/conf.d/99-recordloom.ini" <<'EOF'
