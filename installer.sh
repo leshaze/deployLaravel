@@ -32,10 +32,10 @@ main() {
     # benötigt PHP >= 8.4.1.
     PHP_VERSION="${PHP_VERSION:-}"
     # Node.js-Hauptversion aus NodeSource, falls die Distribution kein
-    # Node.js >= NODE_MIN mitbringt. Vite 8 läuft ab 20.19, einzelne
-    # Pakete von recordLoom (concurrently) verlangen aber Node.js 22.
-    NODE_MAJOR="${NODE_MAJOR:-22}"
-    NODE_MIN="${NODE_MIN:-22.12}"
+    # Node.js >= NODE_MIN mitbringt. recordLoom benötigt Node.js 24
+    # (@zxing/library für den Barcode-Scan).
+    NODE_MAJOR="${NODE_MAJOR:-24}"
+    NODE_MIN="${NODE_MIN:-24}"
     SWAP_SIZE_MB="${SWAP_SIZE_MB:-1024}"
     ENABLE_FIREWALL="${ENABLE_FIREWALL:-1}"
     ENABLE_FAIL2BAN="${ENABLE_FAIL2BAN:-1}"
@@ -354,6 +354,7 @@ APP_BRANCH="$APP_BRANCH"
 APP_DIR="$APP_DIR"
 APP_TIMEZONE="$APP_TIMEZONE"
 PHP_VERSION="$PHP_VERSION"
+NODE_MIN="$NODE_MIN"
 SEED_DEMO_DATA="$SEED_DEMO_DATA"
 EOF
     local script_dir=""

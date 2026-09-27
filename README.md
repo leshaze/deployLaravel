@@ -15,7 +15,7 @@ einzurichten und später zu aktualisieren.
 - Raspberry Pi 3/4/5 (Zero 2 W geht, der Build dauert aber lange)
 - **Raspberry Pi OS Lite (64-bit)**, Trixie (empfohlen) oder Bookworm.
   Unter Bookworm kommt PHP 8.4 aus dem Sury-Repository, da die
-  Distribution nur PHP 8.2 enthält. Node.js 22 kommt unter beiden aus
+  Distribution nur PHP 8.2 enthält. Node.js 24 kommt unter beiden aus
   NodeSource (Bookworm hat Node.js 18, Trixie Node.js 20);
   dafür ist die 64-bit-Variante zwingend.
 - Im Raspberry Pi Imager unter „Einstellungen bearbeiten“: Hostname
@@ -73,8 +73,8 @@ fest (siehe Einstellungen).
 4. PHP 8.4 installieren (aus der Distribution, sonst aus dem
    Sury-Repository) inkl. aller Erweiterungen für Laravel, dompdf und die
    Cover-Vorschaubilder (gd), Upload-Limit 16 MB
-5. Composer (Prüfsumme wird online abgeglichen) und Node.js ≥ 22.12 mit npm
-   installieren (aus der Distribution, sonst NodeSource 22.x)
+5. Composer (Prüfsumme wird online abgeglichen) und Node.js ≥ 24 mit npm
+   installieren (aus der Distribution, sonst NodeSource 24.x)
 6. nginx mit HTTPS (selbst signiertes Zertifikat, 10 Jahre gültig) und
    Umleitung von HTTP auf HTTPS einrichten
 7. Absicherung: Root-Konto sperren, Root-Login per SSH verbieten, Firewall
@@ -98,8 +98,8 @@ curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/main/installe
 | `APP_DIR`                | `/var/www/recordLoom`                        | Installationsverzeichnis                      |
 | `APP_TIMEZONE`           | `Europe/Berlin`                              | Zeitzone von System und App                   |
 | `PHP_VERSION`            | *(automatisch)*                              | z.B. `8.5` erzwingen (mindestens 8.4)         |
-| `NODE_MAJOR`             | `22`                                         | NodeSource-Version, falls nötig               |
-| `NODE_MIN`               | `22.12`                                      | Mindestversion von Node.js                    |
+| `NODE_MAJOR`             | `24`                                         | NodeSource-Version, falls nötig               |
+| `NODE_MIN`               | `24`                                         | Mindestversion von Node.js                    |
 | `SWAP_SIZE_MB`           | `1024`                                       | Swap-Größe                                    |
 | `ENABLE_FIREWALL`        | `1`                                          | ufw einrichten                                |
 | `ENABLE_FAIL2BAN`        | `1`                                          | fail2ban einrichten                           |
