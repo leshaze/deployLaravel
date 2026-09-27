@@ -41,6 +41,25 @@ git clone https://github.com/leshaze/deployLaravel.git
 sudo ./deployLaravel/installer.sh
 ```
 
+### Installation aus einem anderen Branch
+
+Solange die Skripte noch nicht in `main` gemergt sind, muss der Branch
+explizit angegeben werden – sowohl für `installer.sh` als auch für das
+`deploy.sh`, das der Installer nachlädt (ohne `DEPLOY_SCRIPT_URL` würde er
+das `deploy.sh` aus `main` holen):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/claude/deploylaravel-audit-e8zxo2/installer.sh | sudo DEPLOY_SCRIPT_URL=https://raw.githubusercontent.com/leshaze/deployLaravel/claude/deploylaravel-audit-e8zxo2/deploy.sh bash
+```
+
+Aus einem Klon ist das nicht nötig, dort wird das `deploy.sh` neben dem
+Installer verwendet:
+
+```bash
+git clone -b claude/deploylaravel-audit-e8zxo2 https://github.com/leshaze/deployLaravel.git
+sudo ./deployLaravel/installer.sh
+```
+
 ### Was der Installer macht
 
 1. System aktualisieren (`apt full-upgrade`), Zeitzone setzen, optional Hostname setzen
