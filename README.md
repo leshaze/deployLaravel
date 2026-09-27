@@ -41,24 +41,28 @@ git clone https://github.com/leshaze/deployLaravel.git
 sudo ./deployLaravel/installer.sh
 ```
 
-### Installation aus einem anderen Branch
+### Installation aus einem anderen Branch von deployLaravel
 
-Solange die Skripte noch nicht in `main` gemergt sind, muss der Branch
-explizit angegeben werden – sowohl für `installer.sh` als auch für das
-`deploy.sh`, das der Installer nachlädt (ohne `DEPLOY_SCRIPT_URL` würde er
-das `deploy.sh` aus `main` holen):
+Um die Skripte aus einem anderen Branch als `main` zu verwenden (z.B. zum
+Testen von Änderungen), muss der Branch sowohl für `installer.sh` als auch
+für das `deploy.sh` angegeben werden, das der Installer nachlädt (ohne
+`DEPLOY_SCRIPT_URL` würde er das `deploy.sh` aus `main` holen).
+`<branch>` durch den Namen des Branches ersetzen:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/claude/deploylaravel-audit-e8zxo2/installer.sh | sudo DEPLOY_SCRIPT_URL=https://raw.githubusercontent.com/leshaze/deployLaravel/claude/deploylaravel-audit-e8zxo2/deploy.sh bash
+curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/<branch>/installer.sh | sudo DEPLOY_SCRIPT_URL=https://raw.githubusercontent.com/leshaze/deployLaravel/<branch>/deploy.sh bash
 ```
 
 Aus einem Klon ist das nicht nötig, dort wird das `deploy.sh` neben dem
 Installer verwendet:
 
 ```bash
-git clone -b claude/deploylaravel-audit-e8zxo2 https://github.com/leshaze/deployLaravel.git
+git clone -b <branch> https://github.com/leshaze/deployLaravel.git
 sudo ./deployLaravel/installer.sh
 ```
+
+Welcher Branch von **recordLoom** deployt wird, legt dagegen `APP_BRANCH`
+fest (siehe Einstellungen).
 
 ### Was der Installer macht
 
@@ -113,7 +117,7 @@ sudo recordloom-deploy
 Das Skript
 
 1. schaltet den Wartungsmodus ein,
-2. setzt den Code auf den Stand von `origin/<branch>` (lokale Änderungen im Code werden verworfen; `.env`, Datenbank und Uploads bleiben erhalten),
+2. setzt den Code auf den Stand von `origin/<branch>`; lokale Änderungen im Code werden vorher als Patch nach `/var/backups/recordloom/` gesichert und dann verworfen (`.env`, Datenbank und Uploads bleiben erhalten),
 3. führt `composer install --no-dev`, `npm ci` und `npm run build` aus,
 4. sichert die SQLite-Datenbank nach `/var/backups/recordloom/` (die letzten 14 Sicherungen bleiben erhalten),
 5. führt `php artisan migrate --force` aus,
