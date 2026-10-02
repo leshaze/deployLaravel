@@ -135,7 +135,8 @@ main() {
     env_value FILESYSTEM_DISK local "$new_env"
     env_value BROADCAST_CONNECTION log "$new_env"
     # Intervalle des Schedulers von recordLoom (Mail-Backup, Discogs-Preise)
-    env_value BACKUP_INTERVAL_DAYS 7 "$new_env"
+    env_value BACKUP_INTERVAL_DAYS 1 "$new_env"
+    env_value DISCOGS_NIGHTLY_PRICES false "$new_env"
     env_value DISCOGS_PRICE_INTERVAL_HOURS 24 "$new_env"
     chown "$APP_USER:$APP_USER" .env
     chmod 640 .env
