@@ -299,6 +299,18 @@ server {
 }
 EOF
     rm -f /etc/nginx/sites-enabled/default
+    # Ältere, von Hand angelegte Seiten für die App (z.B. "recordLoom" mit
+    # server_name recordloom.local und altem PHP-Socket) hätten Vorrang vor
+    # dieser Seite und werden deshalb deaktiviert (die Datei bleibt erhalten).
+    local site
+    for site in /etc/nginx/sites-enabled/*; do
+        [ -e "$site" ] || [ -L "$site" ] || continue
+        [ "$(basename "$site")" = recordloom ] && continue
+        if [ ! -e "$site" ] || grep -q "$APP_DIR" "$site"; then
+            info "Alte nginx-Seite $(basename "$site") wird deaktiviert"
+            rm -f "$site"
+        fi
+    done
     ln -sf /etc/nginx/sites-available/recordloom /etc/nginx/sites-enabled/recordloom
     nginx -t
     systemctl enable nginx
