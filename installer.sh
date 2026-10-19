@@ -18,7 +18,19 @@ main() {
     set -Eeuo pipefail
     exec </dev/null
 
+    CONF_DIR=/etc/recordloom
+
     # ------------------------------------------------------------------ Config
+    # Bei einem erneuten Lauf bleiben die Werte aus recordloom.conf erhalten,
+    # sofern sie nicht per Umgebungsvariable überschrieben werden.
+    APP_NAME="${APP_NAME:-$(conf_get APP_NAME)}"
+    APP_REPO="${APP_REPO:-$(conf_get APP_REPO)}"
+    APP_BRANCH="${APP_BRANCH:-$(conf_get APP_BRANCH)}"
+    APP_DIR="${APP_DIR:-$(conf_get APP_DIR)}"
+    APP_TIMEZONE="${APP_TIMEZONE:-$(conf_get APP_TIMEZONE)}"
+    SEED_DEMO_DATA="${SEED_DEMO_DATA:-$(conf_get SEED_DEMO_DATA)}"
+    KEEP_BACKUPS="${KEEP_BACKUPS:-$(conf_get KEEP_BACKUPS)}"
+    KEEP_BACKUPS="${KEEP_BACKUPS:-14}"
     APP_NAME="${APP_NAME:-recordLoom}"
     APP_REPO="${APP_REPO:-https://github.com/leshaze/recordLoom.git}"
     APP_BRANCH="${APP_BRANCH:-main}"
@@ -45,7 +57,6 @@ main() {
     SEED_DEMO_DATA="${SEED_DEMO_DATA:-0}"
     DEPLOY_SCRIPT_URL="${DEPLOY_SCRIPT_URL:-https://raw.githubusercontent.com/leshaze/deployLaravel/main/deploy.sh}"
 
-    CONF_DIR=/etc/recordloom
     LOG_FILE=/var/log/recordloom-install.log
     CERT_DIR=/etc/ssl/recordloom
 
@@ -360,7 +371,9 @@ EOF
     step "Deploy-Skript installieren"
     install -d -m 755 "$CONF_DIR"
     cat >"$CONF_DIR/recordloom.conf" <<EOF
-# Generiert von deployLaravel/installer.sh - wird von recordloom-deploy gelesen
+# Einstellungen für recordloom-deploy (geschrieben von deployLaravel/installer.sh).
+# Änderungen bleiben bei einem erneuten Lauf des Installers erhalten.
+# Danach "sudo recordloom-deploy" ausführen.
 APP_NAME="$APP_NAME"
 APP_REPO="$APP_REPO"
 APP_BRANCH="$APP_BRANCH"
@@ -369,6 +382,7 @@ APP_TIMEZONE="$APP_TIMEZONE"
 PHP_VERSION="$PHP_VERSION"
 NODE_MIN="$NODE_MIN"
 SEED_DEMO_DATA="$SEED_DEMO_DATA"
+KEEP_BACKUPS="$KEEP_BACKUPS"
 EOF
     local script_dir=""
     if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
@@ -394,6 +408,12 @@ EOF
     echo "Hinweis: Das Zertifikat ist selbst signiert - der Browser zeigt einmalig eine Warnung."
     echo "Updates einspielen: sudo recordloom-deploy"
     echo "Log: $LOG_FILE"
+}
+
+# conf_get KEY: Wert aus /etc/recordloom/recordloom.conf (leer, wenn nicht vorhanden)
+conf_get() {
+    [ -f "$CONF_DIR/recordloom.conf" ] || return 0
+    sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" "$CONF_DIR/recordloom.conf" | tail -n1
 }
 
 apt_get() {
