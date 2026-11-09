@@ -49,7 +49,8 @@ main() {
     # wird der Hostname in Proxmox gesetzt.
     APP_HOSTNAME="${APP_HOSTNAME:-}"
     # mDNS (avahi): die App ist unter https://<hostname>.local erreichbar.
-    ENABLE_MDNS="${ENABLE_MDNS:-$container_default}"
+    # Funktioniert auch im Proxmox-Container (Bridge ins LAN).
+    ENABLE_MDNS="${ENABLE_MDNS:-1}"
     APP_TIMEZONE="${APP_TIMEZONE:-Europe/Berlin}"
     # PHP-Version (leer = Version der Distribution, sofern 8.4 oder 8.5,
     # sonst 8.4 aus dem Sury-Repository). recordLoom (Laravel 13 / Symfony 8)
@@ -99,7 +100,7 @@ main() {
     apt_get install ca-certificates curl git unzip openssl sqlite3 lsb-release cron sudo
     systemctl enable --now cron
     if [ "$ENABLE_MDNS" = "1" ]; then
-        apt_get install avahi-daemon
+        setup_mdns
     fi
 
     # ------------------------------------------------------- Hostname/Zeitzone
@@ -475,6 +476,29 @@ EOF
 conf_get() {
     [ -f "$CONF_DIR/recordloom.conf" ] || return 0
     sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" "$CONF_DIR/recordloom.conf" | tail -n1
+}
+
+# avahi für <hostname>.local einrichten. Die Begrenzung "rlimit-nproc" lässt
+# avahi in Containern scheitern; damit ein Fehlstart nicht die Paket-
+# installation abbricht, wird der Dienst erst nach der Anpassung gestartet.
+setup_mdns() {
+    local conf=/etc/avahi/avahi-daemon.conf
+    if ! dpkg -s avahi-daemon >/dev/null 2>&1; then
+        printf '#!/bin/sh\nexit 101\n' >/usr/sbin/policy-rc.d
+        chmod 755 /usr/sbin/policy-rc.d
+        apt_get install avahi-daemon || true
+        rm -f /usr/sbin/policy-rc.d
+    fi
+    if [ -f "$conf" ]; then
+        sed -i 's/^rlimit-nproc=/#rlimit-nproc=/' "$conf"
+    fi
+    systemctl enable avahi-daemon >/dev/null 2>&1 || true
+    if systemctl restart avahi-daemon && systemctl is-active --quiet avahi-daemon; then
+        info "mDNS aktiv: $(hostname).local"
+    else
+        warn "avahi-daemon läuft nicht - $(hostname).local ist nicht erreichbar (Adresse: IP bzw. APP_URL)"
+        ENABLE_MDNS=0
+    fi
 }
 
 apt_get() {

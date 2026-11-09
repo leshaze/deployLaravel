@@ -29,7 +29,7 @@ Ein LXC-Container in Proxmox (*Create CT*):
 | ---------------- | ----------------------------------------------------------------------- |
 | Template         | `debian-13-standard` (amd64)                                            |
 | Typ              | unprivilegiert, Option **Nesting** aktiv (Standard bei neuen Containern; Debian 13 braucht es für systemd) |
-| Hostname         | z.B. `recordloom` – wird in Proxmox gesetzt, nicht im Container          |
+| Hostname         | z.B. `recordloom` → die App ist unter `https://recordloom.local` erreichbar |
 | CPU / RAM / Swap | 2 Kerne, 2048 MB RAM, 512 MB Swap (der Frontend-Build braucht Speicher) |
 | Disk             | 8 GB (App mit `vendor/` und `node_modules/` etwa 1 GB, dazu Daten und Sicherungen) |
 | Netzwerk         | feste IP-Adresse oder DHCP-Reservierung, damit die Adresse der App gleich bleibt |
@@ -49,13 +49,20 @@ curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/main/installe
 ```
 
 Der Installer läuft ohne Rückfragen durch (10–20 Minuten) und endet mit der
-Adresse der App, z.B. `https://192.168.1.50`. Das Zertifikat ist selbst
-signiert, der Browser zeigt deshalb einmalig eine Warnung. Das Protokoll
-steht in `/var/log/recordloom-install.log`.
+Adresse der App, z.B. `https://recordloom.local` (zusätzlich ist sie über
+die IP-Adresse erreichbar). Das Zertifikat ist selbst signiert, der Browser
+zeigt deshalb einmalig eine Warnung. Das Protokoll steht in
+`/var/log/recordloom-install.log`.
 
-Hat der Container einen Namen im lokalen DNS (z.B. im Router oder
-Pi-hole), diesen als Adresse mitgeben. Er landet dann in der `.env` (für
-Links in Mails) und im Zertifikat:
+`<hostname>.local` funktioniert per mDNS: Der Container meldet sich über
+avahi selbst im Netz, ein DNS-Server ist nicht nötig. Windows 10/11, macOS,
+iOS und die meisten Linux-Systeme lösen solche Namen auf, Android nur
+teilweise. Ist die Proxmox-Firewall für den Container aktiv, zusätzlich
+UDP 5353 erlauben.
+
+Soll die App stattdessen unter einem Namen aus dem lokalen DNS (z.B. vom
+Router oder Pi-hole) laufen, diesen als Adresse mitgeben. Er landet dann in
+der `.env` (für Links in Mails) und im Zertifikat:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/main/installer.sh \
@@ -87,10 +94,10 @@ und lässt alles weg, was dort Sache von Proxmox ist:
 
 | Thema               | Im Container                                                              | Auf einem Raspberry Pi                    |
 | ------------------- | ------------------------------------------------------------------------- | ----------------------------------------- |
-| Firewall            | keine – in Proxmox unter *Container → Firewall* nur TCP 22, 80, 443 erlauben | ufw: SSH, HTTP, HTTPS, mDNS          |
+| Firewall            | keine – in Proxmox unter *Container → Firewall* nur TCP 22, 80, 443 und UDP 5353 erlauben | ufw: SSH, HTTP, HTTPS, mDNS |
 | fail2ban            | nein                                                                      | ja, für SSH                               |
-| mDNS (`name.local`) | nein – Adresse ist die IP oder `APP_URL`                                  | ja (avahi)                                |
-| Hostname            | in Proxmox setzen                                                         | über `APP_HOSTNAME`                       |
+| mDNS (`name.local`) | ja (avahi, für Container angepasst)                                       | ja (avahi)                                |
+| Hostname            | in Proxmox setzen (*Container → DNS*), bestimmt `<hostname>.local`        | über `APP_HOSTNAME`                       |
 | Swap                | in Proxmox setzen                                                         | 1024 MB über `dphys-swapfile` (bis Bookworm) |
 | root sperren        | nur, wenn es einen anderen Benutzer mit sudo-Rechten gibt                  | ja (dort gibt es immer einen)             |
 
@@ -100,13 +107,13 @@ Diese Werte gelten nur für den Installer und werden als Umgebungsvariable über
 
 | Variable                 | Standard                | Bedeutung                                                     |
 | ------------------------ | ----------------------- | ------------------------------------------------------------- |
-| `APP_URL`                | IP bzw. `https://<hostname>.local` | Adresse der App; wird in `recordloom.conf` gespeichert |
+| `APP_URL`                | `https://<hostname>.local` | Adresse der App; wird in `recordloom.conf` gespeichert (ohne laufendes mDNS die IP) |
 | `PHP_VERSION`            | *(automatisch)*         | PHP-Version erzwingen, z.B. `8.5` (mindestens 8.4)            |
 | `NODE_MAJOR`             | `24`                    | NodeSource-Version, falls Node.js nachinstalliert werden muss |
 | `NODE_MIN`               | `24`                    | Mindestversion von Node.js                                    |
 | `ENABLE_FIREWALL`        | Container `0`, sonst `1` | ufw einrichten                                               |
 | `ENABLE_FAIL2BAN`        | Container `0`, sonst `1` | fail2ban einrichten                                          |
-| `ENABLE_MDNS`            | Container `0`, sonst `1` | avahi für `https://<hostname>.local`                         |
+| `ENABLE_MDNS`            | `1`                     | avahi für `https://<hostname>.local`                          |
 | `LOCK_ROOT`              | `auto`                  | root-Passwort sperren und Root-Login per SSH verbieten; `auto` = nur, wenn ein anderer Benutzer sudo-Rechte hat |
 | `APP_HOSTNAME`           | *(unverändert)*         | Neuer Hostname (nur Raspberry Pi; im Container in Proxmox setzen) |
 | `SWAP_SIZE_MB`           | `1024`                  | Swap-Größe (nur Raspberry Pi mit `dphys-swapfile`)            |
@@ -302,7 +309,7 @@ cp /root/recordloom.sqlite database/database.sqlite
 cp -a /root/vom-pi/storage/app/private/. storage/app/private/
 cp /root/vom-pi/.env .env
 chown -R www-data:www-data database storage .env
-nano .env        # APP_URL auf die neue Adresse setzen (wie in /etc/recordloom/recordloom.conf)
+nano .env        # APP_URL prüfen (wie in /etc/recordloom/recordloom.conf)
 recordloom-deploy
 ```
 
@@ -313,7 +320,9 @@ Migration nicht exakt umwandeln kann (z.B. ein Datum wie „12.03.1974“),
 hängt recordLoom an die Notiz des Datensatzes an.
 
 **3. Auf dem Pi** danach den Scheduler abschalten, sonst verschickt er
-weiter Backups (oder den Pi ganz ausschalten):
+weiter Backups. Haben Pi und Container denselben Hostnamen, den Pi am besten
+ganz ausschalten: Sonst melden sich beide per mDNS, und einer wird zu
+`<hostname>-2.local`.
 
 ```bash
 sudo rm /etc/cron.d/recordloom
@@ -336,6 +345,7 @@ dass alle bisherigen Migrationen gelaufen sind:
 | Im Container starten Dienste nicht (z.B. nginx, php-fpm, cron) | In Proxmox unter *Container → Options → Features* **Nesting** aktivieren und den Container neu starten |
 | App im Netz nicht erreichbar              | Proxmox-Firewall des Containers bzw. Datacenters: TCP 80 und 443 erlauben |
 | Links in Mails zeigen auf die falsche Adresse | `APP_URL` in der `.env` korrigieren, danach `php artisan optimize` |
+| `<hostname>.local` nicht erreichbar       | `systemctl status avahi-daemon` im Container; Proxmox-Firewall: UDP 5353 erlauben; auf dem Rechner `ping <hostname>.local` testen (Android kann `.local` oft nicht) |
 | Warnung „Lokale Änderungen … verworfen“   | Die Änderungen liegen als `local-changes-*.patch` in `/var/backups/recordloom/` |
 
 ### Datenbank-Sicherung zurückspielen
