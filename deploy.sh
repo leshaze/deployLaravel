@@ -34,14 +34,14 @@ main() {
     KEEP_BACKUPS="${KEEP_BACKUPS:-14}"
 
     if [ "$(id -u)" -ne 0 ]; then
-        echo "Bitte mit sudo ausführen." >&2
+        echo "Bitte als root bzw. mit sudo ausführen." >&2
         exit 1
     fi
 
     PHP_BIN="php${PHP_VERSION}"
     command -v "$PHP_BIN" >/dev/null || PHP_BIN=php
     PHP_FPM_SERVICE="$("$PHP_BIN" -r 'echo "php".PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION."-fpm";')"
-    for tool in git composer npm sqlite3; do
+    for tool in git composer npm sqlite3 runuser; do
         command -v "$tool" >/dev/null || { error "$tool fehlt - bitte zuerst installer.sh ausführen"; exit 1; }
     done
 
@@ -120,7 +120,7 @@ main() {
     env_value APP_NAME "$APP_NAME" "$new_env"
     env_value APP_ENV production "$new_env"
     env_value APP_DEBUG false "$new_env"
-    env_value APP_URL "https://${host}.local" "$new_env"
+    env_value APP_URL "${APP_URL:-https://${host}.local}" "$new_env"
     env_value APP_TIMEZONE "$APP_TIMEZONE" "$new_env"
     env_value APP_LOCALE de "$new_env"
     env_value LOG_CHANNEL stack "$new_env"
@@ -228,11 +228,14 @@ EOF
     fi
 }
 
-# Befehle als Webserver-Benutzer ausführen, mit beschreibbarem HOME für die
-# Caches von Composer und npm. Puppeteer wird von recordLoom nicht mehr
+# Befehle als Webserver-Benutzer mit leerer, fester Umgebung ausführen (wie
+# sudo, das aber in minimalen Containern fehlt) und mit beschreibbarem HOME
+# für die Caches von Composer und npm. Puppeteer wird von recordLoom nicht mehr
 # genutzt; der Chrome-Download würde auf ARM zudem fehlschlagen.
 as_app() {
-    sudo -u "$APP_USER" env \
+    runuser -u "$APP_USER" -- env -i \
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        LANG=C.UTF-8 \
         HOME="$APP_HOME" \
         COMPOSER_HOME="$APP_HOME/composer" \
         npm_config_cache="$APP_HOME/npm" \

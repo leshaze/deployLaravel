@@ -1,12 +1,14 @@
 # deployLaravel
 
 Skripte, um [recordLoom](https://github.com/leshaze/recordLoom) (Laravel 13,
-SQLite, Vite 8, dompdf) vollautomatisch auf einem Raspberry Pi einzurichten
-und später zu aktualisieren.
+SQLite, Vite 8, dompdf) vollautomatisch in einem **Proxmox-Container mit
+Debian 13** einzurichten und später zu aktualisieren. Ein Raspberry Pi mit
+Raspberry Pi OS funktioniert weiterhin (siehe
+[Raspberry Pi](#raspberry-pi)).
 
 | Datei          | Zweck                                                                                     |
 | -------------- | ----------------------------------------------------------------------------------------- |
-| `installer.sh` | Richtet den Pi ein (Pakete, PHP, Node.js, nginx + HTTPS, Absicherung) und deployt danach die App |
+| `installer.sh` | Richtet das System ein (Pakete, PHP, Node.js, nginx + HTTPS) und deployt danach die App   |
 | `deploy.sh`    | Installiert bzw. aktualisiert die App; wird als `recordloom-deploy` installiert           |
 
 **Inhalt:**
@@ -15,83 +17,126 @@ und später zu aktualisieren.
 [Konfiguration](#konfiguration) ·
 [Updates](#updates) ·
 [Scheduler](#scheduler-mail-backup-discogs-preise) ·
-[Umzug einer alten Installation](#umzug-einer-alten-installation) ·
+[Umzug vom Raspberry Pi](#umzug-vom-raspberry-pi-in-den-container) ·
 [Fehlersuche](#fehlersuche) ·
 [Dateien und Pfade](#dateien-und-pfade)
 
 ## Voraussetzungen
 
-- Raspberry Pi 3, 4 oder 5 (ein Zero 2 W geht, der Build dauert aber sehr lange)
-- **Raspberry Pi OS Lite (64-bit)**, Trixie (empfohlen) oder Bookworm.
-  recordLoom braucht PHP ≥ 8.4 und Node.js ≥ 24. Unter Bookworm kommt PHP
-  aus dem Sury-Repository, Node.js kommt unter beiden Versionen aus
-  NodeSource. NodeSource gibt es nur für 64-bit, ein 32-bit-System (`armhf`)
-  funktioniert deshalb nicht.
-- Im Raspberry Pi Imager unter „Einstellungen bearbeiten“: Hostname
-  (z.B. `recordloom`), Benutzer und Passwort, WLAN und **SSH aktivieren**
-- Internetzugang während der Installation
+Ein LXC-Container in Proxmox (*Create CT*):
+
+| Einstellung      | Empfehlung                                                              |
+| ---------------- | ----------------------------------------------------------------------- |
+| Template         | `debian-13-standard` (amd64)                                            |
+| Typ              | unprivilegiert, Option **Nesting** aktiv (Standard bei neuen Containern; Debian 13 braucht es für systemd) |
+| Hostname         | z.B. `recordloom` → die App ist unter `https://recordloom.local` erreichbar |
+| CPU / RAM / Swap | 2 Kerne, 2048 MB RAM, 512 MB Swap (der Frontend-Build braucht Speicher) |
+| Disk             | 8 GB (App mit `vendor/` und `node_modules/` etwa 1 GB, dazu Daten und Sicherungen) |
+| Netzwerk         | feste IP-Adresse oder DHCP-Reservierung, damit die Adresse der App gleich bleibt |
+
+Internetzugang ist während der Installation nötig. recordLoom braucht
+PHP ≥ 8.4 (in Debian 13 enthalten) und Node.js ≥ 24 (kommt von NodeSource).
 
 ## Installation
 
-Pi mit dem Image starten, per SSH anmelden und ausführen:
+Container starten und als root eine Konsole öffnen (Proxmox-Oberfläche
+*Console* oder `pct enter <ID>` auf dem Proxmox-Host). Im Debian-Template
+fehlt eventuell `curl`, deshalb zuerst:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/main/installer.sh | sudo bash
+apt update && apt install -y curl
+curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/main/installer.sh | bash
 ```
 
-Der Installer läuft ohne Rückfragen durch (je nach Modell 10–30 Minuten) und
-endet mit der Adresse der App, z.B. `https://recordloom.local`. Das
-Zertifikat ist selbst signiert, der Browser zeigt deshalb einmalig eine
-Warnung. Das Protokoll steht in `/var/log/recordloom-install.log`.
+Der Installer läuft ohne Rückfragen durch (10–20 Minuten) und endet mit der
+Adresse der App, z.B. `https://recordloom.local` (zusätzlich ist sie über
+die IP-Adresse erreichbar). Das Zertifikat ist selbst signiert, der Browser
+zeigt deshalb einmalig eine Warnung. Das Protokoll steht in
+`/var/log/recordloom-install.log`.
 
-Einstellungen lassen sich beim Aufruf mitgeben, z.B.:
+`<hostname>.local` funktioniert per mDNS: Der Container meldet sich über
+avahi selbst im Netz, ein DNS-Server ist nicht nötig. Windows 10/11, macOS,
+iOS und die meisten Linux-Systeme lösen solche Namen auf, Android nur
+teilweise. Ist die Proxmox-Firewall für den Container aktiv, zusätzlich
+UDP 5353 erlauben.
+
+Soll die App stattdessen unter einem Namen aus dem lokalen DNS (z.B. vom
+Router oder Pi-hole) laufen, diesen als Adresse mitgeben. Er landet dann in
+der `.env` (für Links in Mails) und im Zertifikat:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/main/installer.sh \
-  | sudo APP_HOSTNAME=recordloom SEED_DEMO_DATA=1 bash
+  | APP_URL=https://recordloom.fritz.box bash
 ```
 
 Der Installer kann jederzeit erneut ausgeführt werden. Er bringt das System
 auf den aktuellen Stand und überschreibt weder Daten noch `.env`,
 Zertifikat oder die Einstellungen in `/etc/recordloom/recordloom.conf`.
 
+Alle Befehle in dieser Anleitung laufen als root. Der Installer richtet
+auch `sudo` ein; als root kann es vor den Befehlen entfallen.
+
 ### Was der Installer macht
 
-1. System aktualisieren (`apt full-upgrade`), Zeitzone setzen, optional den Hostnamen
-2. Swap auf 1024 MB vergrößern (nur mit `dphys-swapfile`, also bis Bookworm)
-3. WLAN-Energiesparmodus über NetworkManager abschalten
-4. PHP ≥ 8.4 mit allen Erweiterungen für Laravel, dompdf und die
+1. System aktualisieren (`apt full-upgrade`), Zeitzone setzen
+2. PHP ≥ 8.4 mit allen Erweiterungen für Laravel, dompdf und die
    Cover-Vorschaubilder (gd) installieren, Upload-Limit 16 MB
-5. Composer (Prüfsumme wird online abgeglichen), Node.js ≥ 24 und cron installieren
-6. nginx mit HTTPS (selbst signiertes Zertifikat, 10 Jahre gültig) und
+3. Composer (Prüfsumme wird online abgeglichen), Node.js ≥ 24, cron und sudo installieren
+4. nginx mit HTTPS (selbst signiertes Zertifikat, 10 Jahre gültig) und
    Umleitung von HTTP auf HTTPS einrichten; alte, von Hand angelegte
-   nginx-Seiten für die App werden deaktiviert
-7. Absicherung:
-   - root-Passwort sperren und Root-Login per SSH verbieten (Anmeldung mit dem eigenen Benutzer und `sudo`)
-   - Firewall ufw: nur SSH (Port 22), HTTP, HTTPS und mDNS offen
-   - fail2ban für SSH
-8. `/etc/recordloom/recordloom.conf` schreiben, `recordloom-deploy`
+   nginx-Seiten für die App werden deaktiviert. IPv6 wird nur verwendet,
+   wenn der Container es hat.
+5. `/etc/recordloom/recordloom.conf` schreiben, `recordloom-deploy`
    installieren und die App deployen
+
+Im Container erkennt der Installer, dass er nicht auf echter Hardware läuft,
+und lässt alles weg, was dort Sache von Proxmox ist:
+
+| Thema               | Im Container                                                              | Auf einem Raspberry Pi                    |
+| ------------------- | ------------------------------------------------------------------------- | ----------------------------------------- |
+| Firewall            | keine – in Proxmox unter *Container → Firewall* nur TCP 22, 80, 443 und UDP 5353 erlauben | ufw: SSH, HTTP, HTTPS, mDNS |
+| fail2ban            | nein                                                                      | ja, für SSH                               |
+| mDNS (`name.local`) | ja (avahi, für Container angepasst)                                       | ja (avahi)                                |
+| Hostname            | in Proxmox setzen (*Container → DNS*), bestimmt `<hostname>.local`        | über `APP_HOSTNAME`                       |
+| Swap                | in Proxmox setzen                                                         | 1024 MB über `dphys-swapfile` (bis Bookworm) |
+| root sperren        | nur, wenn es einen anderen Benutzer mit sudo-Rechten gibt                  | ja (dort gibt es immer einen)             |
 
 ### Optionen des Installers
 
 Diese Werte gelten nur für den Installer und werden als Umgebungsvariable übergeben:
 
-| Variable                 | Standard        | Bedeutung                                                     |
-| ------------------------ | --------------- | ------------------------------------------------------------- |
-| `APP_HOSTNAME`           | *(unverändert)* | Neuer Hostname → `https://<name>.local`                       |
-| `PHP_VERSION`            | *(automatisch)* | PHP-Version erzwingen, z.B. `8.5` (mindestens 8.4)            |
-| `NODE_MAJOR`             | `24`            | NodeSource-Version, falls Node.js nachinstalliert werden muss |
-| `NODE_MIN`               | `24`            | Mindestversion von Node.js                                    |
-| `SWAP_SIZE_MB`           | `1024`          | Swap-Größe                                                    |
-| `ENABLE_FIREWALL`        | `1`             | ufw einrichten (`0` = nicht anfassen)                         |
-| `ENABLE_FAIL2BAN`        | `1`             | fail2ban einrichten                                           |
-| `DISABLE_WIFI_POWERSAVE` | `1`             | WLAN-Energiesparen abschalten                                 |
-| `REGENERATE_SSH_KEYS`    | `0`             | SSH-Hostschlüssel neu erzeugen (Raspberry Pi OS macht das beim ersten Start bereits selbst) |
-| `DEPLOY_SCRIPT_URL`      | `deploy.sh` aus `main` | Woher der Installer `recordloom-deploy` lädt           |
+| Variable                 | Standard                | Bedeutung                                                     |
+| ------------------------ | ----------------------- | ------------------------------------------------------------- |
+| `APP_URL`                | `https://<hostname>.local` | Adresse der App; wird in `recordloom.conf` gespeichert (ohne laufendes mDNS die IP) |
+| `PHP_VERSION`            | *(automatisch)*         | PHP-Version erzwingen, z.B. `8.5` (mindestens 8.4)            |
+| `NODE_MAJOR`             | `24`                    | NodeSource-Version, falls Node.js nachinstalliert werden muss |
+| `NODE_MIN`               | `24`                    | Mindestversion von Node.js                                    |
+| `ENABLE_FIREWALL`        | Container `0`, sonst `1` | ufw einrichten                                               |
+| `ENABLE_FAIL2BAN`        | Container `0`, sonst `1` | fail2ban einrichten                                          |
+| `ENABLE_MDNS`            | `1`                     | avahi für `https://<hostname>.local`                          |
+| `LOCK_ROOT`              | `auto`                  | root-Passwort sperren und Root-Login per SSH verbieten; `auto` = nur, wenn ein anderer Benutzer sudo-Rechte hat |
+| `APP_HOSTNAME`           | *(unverändert)*         | Neuer Hostname (nur Raspberry Pi; im Container in Proxmox setzen) |
+| `SWAP_SIZE_MB`           | `1024`                  | Swap-Größe (nur Raspberry Pi mit `dphys-swapfile`)            |
+| `DISABLE_WIFI_POWERSAVE` | `1`                     | WLAN-Energiesparen abschalten (nur mit WLAN)                  |
+| `REGENERATE_SSH_KEYS`    | `0`                     | SSH-Hostschlüssel neu erzeugen                                |
+| `DEPLOY_SCRIPT_URL`      | `deploy.sh` aus `main`  | Woher der Installer `recordloom-deploy` lädt                  |
 
 Zusätzlich lassen sich alle Werte aus dem nächsten Abschnitt
 (`APP_BRANCH` usw.) mitgeben. Sie landen dann in `recordloom.conf`.
+
+### Raspberry Pi
+
+Auf einem Raspberry Pi 3, 4 oder 5 mit **Raspberry Pi OS Lite (64-bit)**,
+Trixie oder Bookworm, funktionieren die Skripte genauso. Im Raspberry Pi
+Imager Hostname, Benutzer, WLAN und SSH einrichten, per SSH anmelden und
+ausführen:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/main/installer.sh | sudo bash
+```
+
+Unter Bookworm kommt PHP 8.4 aus dem Sury-Repository. Ein 32-bit-System
+(`armhf`) funktioniert nicht, weil es Node.js 24 dafür nicht gibt.
 
 ## Konfiguration
 
@@ -109,6 +154,7 @@ sudo recordloom-deploy
 | `APP_BRANCH`     | `main`                                      | Branch von recordLoom, der deployt wird                     |
 | `APP_REPO`       | `https://github.com/leshaze/recordLoom.git` | Git-Repository der App                                      |
 | `APP_DIR`        | `/var/www/recordLoom`                       | Installationsverzeichnis                                    |
+| `APP_URL`        | *(vom Installer)*                           | Adresse der App (für die `.env` einer Neuinstallation)      |
 | `APP_NAME`       | `recordLoom`                                | Name der App (für die `.env` einer Neuinstallation)         |
 | `APP_TIMEZONE`   | `Europe/Berlin`                             | Zeitzone (für die `.env` einer Neuinstallation)             |
 | `KEEP_BACKUPS`   | `14`                                        | Anzahl der aufbewahrten Datenbank-Sicherungen               |
@@ -140,7 +186,7 @@ gelöscht wurde), deployt das Skript mit einer Warnung `main` und setzt
 Die Einstellungen von recordLoom selbst stehen in `/var/www/recordLoom/.env`.
 Bei einer Neuinstallation erzeugt `recordloom-deploy` sie aus
 `.env.example` und setzt dabei u.a. `APP_ENV=production`, `APP_DEBUG=false`,
-`APP_URL=https://<hostname>.local`, `APP_LOCALE=de`, `LOG_LEVEL=warning`
+`APP_URL` (aus `recordloom.conf`), `APP_LOCALE=de`, `LOG_LEVEL=warning`
 (tägliche Logdateien, 14 Tage) und `SESSION_SECURE_COOKIE=true`. Bei
 späteren Läufen ergänzt es nur fehlende Werte, eigene Änderungen bleiben
 erhalten.
@@ -175,7 +221,7 @@ Das Skript
 Alle Befehle laufen als `www-data`, dem Besitzer der App-Dateien.
 
 `recordloom-deploy` ist eine Kopie von `deploy.sh`. Neue Versionen des
-Skripts kommen auf den Pi, wenn der Installer erneut läuft, oder direkt mit:
+Skripts kommen auf das System, wenn der Installer erneut läuft, oder direkt mit:
 
 ```bash
 sudo curl -fsSLo /usr/local/sbin/recordloom-deploy https://raw.githubusercontent.com/leshaze/deployLaravel/main/deploy.sh
@@ -191,7 +237,7 @@ jede Minute den Laravel-Scheduler als `www-data`:
 ```
 
 recordLoom prüft damit alle 15 Minuten, ob eine Aufgabe fällig ist, und holt
-verpasste Läufe nach (z.B. wenn der Pi aus war). Gesteuert wird das über die
+verpasste Läufe nach (z.B. wenn der Container aus war). Gesteuert wird das über die
 `.env`:
 
 | Variable                       | Wert vom Deploy | Bedeutung                                                     |
@@ -232,23 +278,60 @@ sudo -u www-data php artisan backup:mail --force     # Backup sofort mailen
 sudo -u www-data php artisan discogs:update-prices   # Preise sofort abgleichen
 ```
 
-## Umzug einer alten Installation
+## Umzug vom Raspberry Pi in den Container
 
-Eine Installation, die mit älteren Versionen dieser Skripte bzw. nach der
-alten Anleitung eingerichtet wurde, wird mit dem **Installer** umgestellt.
-`recordloom-deploy` gibt es dort noch nicht, und PHP und Node.js sind zu alt.
+Der Container wird zuerst wie oben neu installiert. Danach kommen Datenbank,
+Cover und `.env` vom Pi herüber. Der Pi muss dafür nicht auf dem neuesten
+Stand sein: Die Migrationen laufen anschließend im Container.
 
-1. Datenbank und `.env` vom Pi auf einen anderen Rechner kopieren
-   (`/var/www/recordLoom/database/database.sqlite`, `/var/www/recordLoom/.env`).
-2. Prüfen, dass alle bisherigen Migrationen gelaufen sind:
-   `cd /var/www/recordLoom && sudo -u www-data php artisan migrate:status`
-3. Installer wie oben ausführen.
+**1. Auf dem Pi** die App anhalten (damit sich nichts mehr ändert) und die
+Daten einpacken:
 
-Der Installer deaktiviert die alte nginx-Seite. Die App ist danach nur noch
-über HTTPS erreichbar. Das Deploy-Skript übernimmt die vorhandene `.env`,
-ergänzt fehlende Werte und migriert die Datenbank. Werte, die die Migration
-nicht exakt umwandeln kann (z.B. ein Datum wie „12.03.1974“), hängt
-recordLoom an die Notiz des Datensatzes an.
+```bash
+cd /var/www/recordLoom
+sudo -u www-data php artisan down
+sudo sqlite3 database/database.sqlite ".backup '/tmp/recordloom.sqlite'"
+sudo tar -czf /tmp/recordloom-files.tgz .env storage/app/private
+sudo chown "$USER" /tmp/recordloom.sqlite /tmp/recordloom-files.tgz
+sudo chmod 600 /tmp/recordloom.sqlite /tmp/recordloom-files.tgz
+```
+
+**2. Im Container** (als root) die Dateien vom Pi holen und einspielen
+(`pi@192.168.1.20` durch Benutzer und Adresse des Pi ersetzen):
+
+```bash
+scp pi@192.168.1.20:/tmp/recordloom.sqlite pi@192.168.1.20:/tmp/recordloom-files.tgz /root/
+mkdir -p /root/vom-pi && tar -xzf /root/recordloom-files.tgz -C /root/vom-pi
+
+cd /var/www/recordLoom
+sudo -u www-data php artisan down
+cp /root/recordloom.sqlite database/database.sqlite
+cp -a /root/vom-pi/storage/app/private/. storage/app/private/
+cp /root/vom-pi/.env .env
+chown -R www-data:www-data database storage .env
+nano .env        # APP_URL prüfen (wie in /etc/recordloom/recordloom.conf)
+recordloom-deploy
+```
+
+Die alte `.env` bringt `APP_KEY` sowie die Mail-, Backup- und
+Discogs-Einstellungen mit. `recordloom-deploy` ergänzt fehlende Werte,
+migriert die Datenbank und nimmt die App wieder online. Werte, die eine
+Migration nicht exakt umwandeln kann (z.B. ein Datum wie „12.03.1974“),
+hängt recordLoom an die Notiz des Datensatzes an.
+
+**3. Auf dem Pi** danach den Scheduler abschalten, sonst verschickt er
+weiter Backups. Haben Pi und Container denselben Hostnamen, den Pi am besten
+ganz ausschalten: Sonst melden sich beide per mDNS, und einer wird zu
+`<hostname>-2.local`.
+
+```bash
+sudo rm /etc/cron.d/recordloom
+```
+
+Eine Installation nach der alten Anleitung dieses Repositories (vor
+`recordloom-deploy`) wird genauso umgezogen. Vorher auf dem Pi prüfen,
+dass alle bisherigen Migrationen gelaufen sind:
+`sudo -u www-data php artisan migrate:status`.
 
 ## Fehlersuche
 
@@ -259,6 +342,10 @@ recordLoom an die Notiz des Datensatzes an.
 | Fehlerseite / HTTP 500                    | `sudo tail -n 50 /var/www/recordLoom/storage/logs/laravel-$(date +%F).log` |
 | `.env` geändert, aber keine Wirkung       | `cd /var/www/recordLoom && sudo -u www-data php artisan optimize` |
 | Warnung „Node.js … ist älter als 24“      | Installer erneut ausführen                                     |
+| Im Container starten Dienste nicht (z.B. nginx, php-fpm, cron) | In Proxmox unter *Container → Options → Features* **Nesting** aktivieren und den Container neu starten |
+| App im Netz nicht erreichbar              | Proxmox-Firewall des Containers bzw. Datacenters: TCP 80 und 443 erlauben |
+| Links in Mails zeigen auf die falsche Adresse | `APP_URL` in der `.env` korrigieren, danach `php artisan optimize` |
+| `<hostname>.local` nicht erreichbar       | `systemctl status avahi-daemon` im Container; Proxmox-Firewall: UDP 5353 erlauben; auf dem Rechner `ping <hostname>.local` testen (Android kann `.local` oft nicht) |
 | Warnung „Lokale Änderungen … verworfen“   | Die Änderungen liegen als `local-changes-*.patch` in `/var/backups/recordloom/` |
 
 ### Datenbank-Sicherung zurückspielen
@@ -309,6 +396,6 @@ daneben verwendet.
 | nginx                       | `/etc/nginx/sites-available/recordloom`               |
 | Zertifikat                  | `/etc/ssl/recordloom/`                                |
 | PHP-Einstellungen           | `/etc/php/<Version>/fpm/conf.d/99-recordloom.ini`     |
-| fail2ban                    | `/etc/fail2ban/jail.d/recordloom.local`               |
-| SSH (kein Root-Login)       | `/etc/ssh/sshd_config.d/10-recordloom.conf`           |
+| fail2ban (nur Raspberry Pi) | `/etc/fail2ban/jail.d/recordloom.local`               |
+| SSH (kein Root-Login, nur wenn root gesperrt) | `/etc/ssh/sshd_config.d/10-recordloom.conf` |
 | Caches von Composer und npm | `/var/lib/recordloom/`                                |
