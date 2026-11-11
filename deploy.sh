@@ -22,7 +22,10 @@ main() {
         eval "$overrides"
     fi
     APP_NAME="${APP_NAME:-recordLoom}"
-    APP_REPO="${APP_REPO:-https://github.com/leshaze/recordLoom.git}"
+    # recordLoom ist privat: Zugriff per SSH mit Deploy-Key (siehe README).
+    APP_REPO="${APP_REPO:-git@github.com:leshaze/recordLoom.git}"
+    # Privater SSH-Schlüssel ohne Passphrase (leer = automatisch suchen)
+    APP_SSH_KEY="${APP_SSH_KEY:-}"
     APP_BRANCH="${APP_BRANCH:-main}"
     APP_DIR="${APP_DIR:-/var/www/recordLoom}"
     APP_TIMEZONE="${APP_TIMEZONE:-Europe/Berlin}"
@@ -37,11 +40,14 @@ main() {
         echo "Bitte als root bzw. mit sudo ausführen." >&2
         exit 1
     fi
+    # Befehle als www-data dürfen nicht im (für sie gesperrten) Verzeichnis
+    # des Aufrufers starten, z.B. /root.
+    cd /
 
     PHP_BIN="php${PHP_VERSION}"
     command -v "$PHP_BIN" >/dev/null || PHP_BIN=php
     PHP_FPM_SERVICE="$("$PHP_BIN" -r 'echo "php".PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION."-fpm";')"
-    for tool in git composer npm sqlite3 runuser; do
+    for tool in git composer npm sqlite3 runuser ssh; do
         command -v "$tool" >/dev/null || { error "$tool fehlt - bitte zuerst installer.sh ausführen"; exit 1; }
     done
 
@@ -56,13 +62,31 @@ main() {
     trap on_exit EXIT
     trap 'error "Abbruch in Zeile $LINENO (Befehl: $BASH_COMMAND)"' ERR
 
-    # Gemergte Feature-Branches werden gelöscht - dann auf main zurückfallen.
-    if [ "$APP_BRANCH" != main ] && ! git ls-remote --exit-code --heads "$APP_REPO" "$APP_BRANCH" >/dev/null 2>&1; then
+    # Bis zur Umstellung auf das private Repository stand hier die
+    # HTTPS-Adresse, die ohne Anmeldung nicht mehr funktioniert.
+    if [ "$APP_REPO" = "https://github.com/leshaze/recordLoom.git" ]; then
+        APP_REPO="git@github.com:leshaze/recordLoom.git"
+        info "Repository-Adresse auf SSH umgestellt: $APP_REPO"
+        conf_set APP_REPO "$APP_REPO"
+    fi
+    setup_git_ssh
+
+    # Zugriff prüfen. Gemergte Feature-Branches werden gelöscht - dann auf
+    # main zurückfallen (aber nur, wenn das Repository erreichbar ist).
+    local heads
+    if ! heads="$(as_app git ls-remote --heads "$APP_REPO" 2>&1)"; then
+        error "Kein Zugriff auf $APP_REPO:"
+        local line
+        while IFS= read -r line; do echo "      $line" >&2; done <<<"$heads"
+        if [ -n "$APP_GIT_SSH" ]; then
+            error "Ist der öffentliche Schlüssel ${SSH_KEY_SOURCE}.pub bei GitHub als Deploy-Key des Repositorys hinterlegt?"
+        fi
+        exit 1
+    fi
+    if [ "$APP_BRANCH" != main ] && ! grep -q "refs/heads/${APP_BRANCH}\$" <<<"$heads"; then
         warn "Branch $APP_BRANCH existiert nicht mehr - verwende main"
         APP_BRANCH=main
-        if [ -f /etc/recordloom/recordloom.conf ]; then
-            sed -i 's|^APP_BRANCH=.*|APP_BRANCH="main"|' /etc/recordloom/recordloom.conf
-        fi
+        conf_set APP_BRANCH main
     fi
 
     step "Deployment von $APP_NAME ($APP_BRANCH) nach $APP_DIR"
@@ -228,6 +252,66 @@ EOF
     fi
 }
 
+# SSH für Git einrichten, wenn das Repository per SSH angesprochen wird.
+# www-data kann den Schlüssel von root nicht lesen, deshalb wird er mit
+# eigener SSH-Konfiguration nach $APP_HOME/.ssh kopiert.
+setup_git_ssh() {
+    APP_GIT_SSH=""
+    case "$APP_REPO" in
+        git@* | ssh://*) ;;
+        *) return 0 ;;
+    esac
+    SSH_KEY_SOURCE="$APP_SSH_KEY"
+    if [ -z "$SSH_KEY_SOURCE" ]; then
+        local candidate
+        for candidate in /etc/recordloom/deploy_key /root/.ssh/id_ed25519 /root/.ssh/id_rsa; do
+            if [ -f "$candidate" ]; then
+                SSH_KEY_SOURCE="$candidate"
+                break
+            fi
+        done
+    fi
+    if [ -z "$SSH_KEY_SOURCE" ] || [ ! -f "$SSH_KEY_SOURCE" ]; then
+        error "Kein SSH-Schlüssel für $APP_REPO gefunden${APP_SSH_KEY:+ ($APP_SSH_KEY)}."
+        error "Schlüssel erzeugen:  ssh-keygen -t ed25519 -N '' -C recordloom-deploy -f /etc/recordloom/deploy_key"
+        error "und /etc/recordloom/deploy_key.pub bei GitHub als Deploy-Key des Repositorys hinterlegen."
+        exit 1
+    fi
+    local ssh_dir="$APP_HOME/.ssh"
+    install -d -o "$APP_USER" -g "$APP_USER" -m 700 "$ssh_dir"
+    install -o "$APP_USER" -g "$APP_USER" -m 600 "$SSH_KEY_SOURCE" "$ssh_dir/deploy_key"
+    # Veröffentlichter Host-Schlüssel von GitHub; andere Hosts beim ersten
+    # Kontakt übernehmen.
+    if ! grep -q '^github.com ssh-ed25519 ' "$ssh_dir/known_hosts" 2>/dev/null; then
+        echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" >>"$ssh_dir/known_hosts"
+    fi
+    chown "$APP_USER:$APP_USER" "$ssh_dir/known_hosts"
+    chmod 644 "$ssh_dir/known_hosts"
+    cat >"$ssh_dir/config" <<EOF
+# Generiert von deployLaravel/deploy.sh
+Host *
+    IdentityFile $ssh_dir/deploy_key
+    IdentitiesOnly yes
+    UserKnownHostsFile $ssh_dir/known_hosts
+    StrictHostKeyChecking accept-new
+    BatchMode yes
+EOF
+    chown "$APP_USER:$APP_USER" "$ssh_dir/config"
+    chmod 600 "$ssh_dir/config"
+    APP_GIT_SSH="ssh -F $ssh_dir/config"
+}
+
+# conf_set KEY VALUE: Wert in /etc/recordloom/recordloom.conf setzen
+conf_set() {
+    local conf=/etc/recordloom/recordloom.conf
+    [ -f "$conf" ] || return 0
+    if grep -q "^$1=" "$conf"; then
+        sed -i "s|^$1=.*|$1=\"$2\"|" "$conf"
+    else
+        echo "$1=\"$2\"" >>"$conf"
+    fi
+}
+
 # Befehle als Webserver-Benutzer mit leerer, fester Umgebung ausführen (wie
 # sudo, das aber in minimalen Containern fehlt) und mit beschreibbarem HOME
 # für die Caches von Composer und npm. Puppeteer wird von recordLoom nicht mehr
@@ -240,6 +324,7 @@ as_app() {
         COMPOSER_HOME="$APP_HOME/composer" \
         npm_config_cache="$APP_HOME/npm" \
         PUPPETEER_SKIP_DOWNLOAD=true \
+        ${APP_GIT_SSH:+GIT_SSH_COMMAND="$APP_GIT_SSH"} \
         "$@"
 }
 

@@ -30,11 +30,15 @@ main() {
     APP_DIR="${APP_DIR:-$(conf_get APP_DIR)}"
     APP_TIMEZONE="${APP_TIMEZONE:-$(conf_get APP_TIMEZONE)}"
     SEED_DEMO_DATA="${SEED_DEMO_DATA:-$(conf_get SEED_DEMO_DATA)}"
+    APP_SSH_KEY="${APP_SSH_KEY:-$(conf_get APP_SSH_KEY)}"
     APP_URL="${APP_URL:-$(conf_get APP_URL)}"
     KEEP_BACKUPS="${KEEP_BACKUPS:-$(conf_get KEEP_BACKUPS)}"
     KEEP_BACKUPS="${KEEP_BACKUPS:-14}"
     APP_NAME="${APP_NAME:-recordLoom}"
-    APP_REPO="${APP_REPO:-https://github.com/leshaze/recordLoom.git}"
+    # recordLoom ist privat: Zugriff per SSH mit Deploy-Key (siehe README).
+    # Die frühere HTTPS-Adresse funktioniert ohne Anmeldung nicht mehr.
+    [ "$APP_REPO" = "https://github.com/leshaze/recordLoom.git" ] && APP_REPO=""
+    APP_REPO="${APP_REPO:-git@github.com:leshaze/recordLoom.git}"
     APP_BRANCH="${APP_BRANCH:-main}"
     APP_DIR="${APP_DIR:-/var/www/recordLoom}"
     # Läuft das System in einem Container (z.B. Proxmox LXC)? Dort sind
@@ -97,7 +101,7 @@ main() {
     step "System aktualisieren"
     apt_get update
     apt_get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold full-upgrade
-    apt_get install ca-certificates curl git unzip openssl sqlite3 lsb-release cron sudo
+    apt_get install ca-certificates curl git openssh-client unzip openssl sqlite3 lsb-release cron sudo
     systemctl enable --now cron
     if [ "$ENABLE_MDNS" = "1" ]; then
         setup_mdns
@@ -437,6 +441,7 @@ EOF
 # Danach "recordloom-deploy" (als root) ausführen.
 APP_NAME="$APP_NAME"
 APP_REPO="$APP_REPO"
+APP_SSH_KEY="$APP_SSH_KEY"
 APP_BRANCH="$APP_BRANCH"
 APP_DIR="$APP_DIR"
 APP_URL="$APP_URL"
@@ -456,6 +461,30 @@ EOF
         curl -fsSLo /usr/local/sbin/recordloom-deploy "$DEPLOY_SCRIPT_URL"
         chmod 755 /usr/local/sbin/recordloom-deploy
     fi
+
+    # Privates Repository per SSH: ohne vorhandenen Schlüssel einen Deploy-Key
+    # erzeugen. Er muss erst bei GitHub eingetragen werden, deshalb wird dann
+    # noch nicht deployt.
+    case "$APP_REPO" in
+        git@* | ssh://*)
+            if [ -z "$APP_SSH_KEY" ] && [ ! -f "$CONF_DIR/deploy_key" ] &&
+                [ ! -f /root/.ssh/id_ed25519 ] && [ ! -f /root/.ssh/id_rsa ]; then
+                step "Deploy-Key für das private Repository erzeugen"
+                ssh-keygen -q -t ed25519 -N "" -C "recordloom-deploy@$(hostname)" -f "$CONF_DIR/deploy_key"
+                chmod 600 "$CONF_DIR/deploy_key"
+                trap - ERR
+                echo
+                echo -e "\e[93mDiesen öffentlichen Schlüssel bei GitHub hinterlegen:\e[0m"
+                echo "  Repository → Settings → Deploy keys → Add deploy key (ohne Schreibzugriff)"
+                echo
+                cat "$CONF_DIR/deploy_key.pub"
+                echo
+                echo "Danach die Installation abschließen mit:  recordloom-deploy"
+                echo "Log: $LOG_FILE"
+                exit 0
+            fi
+            ;;
+    esac
 
     step "recordLoom deployen"
     /usr/local/sbin/recordloom-deploy
