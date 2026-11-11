@@ -218,11 +218,14 @@ Reihenfolge gesucht:
 
 1. `APP_SSH_KEY` aus `recordloom.conf`, falls gesetzt
 2. `/etc/recordloom/deploy_key`
-3. `/root/.ssh/id_ed25519`
-4. `/root/.ssh/id_rsa`
+3. `/root/.ssh/id_ed25519`, `/root/.ssh/id_rsa`
+4. bei Aufruf mit `sudo`: `~/.ssh/id_ed25519` bzw. `~/.ssh/id_rsa` des
+   aufrufenden Benutzers
 
-Liegt der Schlüssel woanders (z.B. im Home-Verzeichnis eines anderen
-Benutzers), den Pfad in `recordloom.conf` eintragen:
+Welchem Benutzer der Schlüssel gehört, ist egal: Das Skript läuft als root
+und kann ihn überall lesen. Liegt er woanders oder wird `recordloom-deploy`
+direkt als root bzw. per Cron gestartet, den Pfad in `recordloom.conf`
+eintragen:
 
 ```bash
 APP_SSH_KEY="/home/pi/.ssh/id_ed25519"

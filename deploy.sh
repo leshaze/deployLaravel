@@ -263,8 +263,16 @@ setup_git_ssh() {
     esac
     SSH_KEY_SOURCE="$APP_SSH_KEY"
     if [ -z "$SSH_KEY_SOURCE" ]; then
-        local candidate
-        for candidate in /etc/recordloom/deploy_key /root/.ssh/id_ed25519 /root/.ssh/id_rsa; do
+        local candidate candidates=(/etc/recordloom/deploy_key /root/.ssh/id_ed25519 /root/.ssh/id_rsa)
+        # Bei Aufruf mit sudo auch den Schlüssel des aufrufenden Benutzers.
+        if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+            local sudo_home
+            sudo_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+            if [ -n "$sudo_home" ]; then
+                candidates+=("$sudo_home/.ssh/id_ed25519" "$sudo_home/.ssh/id_rsa")
+            fi
+        fi
+        for candidate in "${candidates[@]}"; do
             if [ -f "$candidate" ]; then
                 SSH_KEY_SOURCE="$candidate"
                 break
@@ -273,7 +281,8 @@ setup_git_ssh() {
     fi
     if [ -z "$SSH_KEY_SOURCE" ] || [ ! -f "$SSH_KEY_SOURCE" ]; then
         error "Kein SSH-Schlüssel für $APP_REPO gefunden${APP_SSH_KEY:+ ($APP_SSH_KEY)}."
-        error "Schlüssel erzeugen:  ssh-keygen -t ed25519 -N '' -C recordloom-deploy -f /etc/recordloom/deploy_key"
+        error "Vorhandenen Schlüssel eintragen:  APP_SSH_KEY=\"/home/<user>/.ssh/id_ed25519\" in /etc/recordloom/recordloom.conf"
+        error "oder neuen erzeugen:  ssh-keygen -t ed25519 -N '' -C recordloom-deploy -f /etc/recordloom/deploy_key"
         error "und /etc/recordloom/deploy_key.pub bei GitHub als Deploy-Key des Repositorys hinterlegen."
         exit 1
     fi
