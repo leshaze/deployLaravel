@@ -86,8 +86,16 @@ main() {
         exit 1
     fi
 
+    touch "$LOG_FILE"
+    chmod 640 "$LOG_FILE"
     exec > >(tee -a "$LOG_FILE") 2>&1
     trap 'error "Abbruch in Zeile $LINENO (Befehl: $BASH_COMMAND). Details: $LOG_FILE"' ERR
+    validate_settings
+
+    # Eigenes Verzeichnis für Downloads, die als root ausgeführt werden -
+    # nicht unter festen Namen im für alle beschreibbaren /tmp.
+    TMP_DIR="$(mktemp -d)"
+    trap 'rm -rf "$TMP_DIR"' EXIT
 
     export DEBIAN_FRONTEND=noninteractive
     export NEEDRESTART_MODE=a
@@ -163,9 +171,8 @@ main() {
     fi
     if ! apt-cache show "php${PHP_VERSION}-fpm" >/dev/null 2>&1; then
         info "php${PHP_VERSION} nicht in der Distribution - Sury-Repository wird eingerichtet"
-        curl -fsSLo /tmp/debsuryorg-archive-keyring.deb https://packages.sury.org/debsuryorg-archive-keyring.deb
-        dpkg -i /tmp/debsuryorg-archive-keyring.deb
-        rm -f /tmp/debsuryorg-archive-keyring.deb
+        curl -fsSLo "$TMP_DIR/debsuryorg-archive-keyring.deb" https://packages.sury.org/debsuryorg-archive-keyring.deb
+        dpkg -i "$TMP_DIR/debsuryorg-archive-keyring.deb"
         echo "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" \
             >/etc/apt/sources.list.d/php-sury.list
         apt_get update
@@ -202,15 +209,13 @@ EOF
     else
         local expected actual
         expected="$(curl -fsSL https://composer.github.io/installer.sig)"
-        curl -fsSLo /tmp/composer-setup.php https://getcomposer.org/installer
-        actual="$(php -r "echo hash_file('sha384', '/tmp/composer-setup.php');")"
-        if [ "$expected" != "$actual" ]; then
-            rm -f /tmp/composer-setup.php
+        curl -fsSLo "$TMP_DIR/composer-setup.php" https://getcomposer.org/installer
+        actual="$(sha384sum "$TMP_DIR/composer-setup.php" | cut -d' ' -f1)"
+        if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
             error "Composer-Installer: Prüfsumme stimmt nicht"
             exit 1
         fi
-        php /tmp/composer-setup.php --quiet --install-dir=/usr/local/bin --filename=composer
-        rm -f /tmp/composer-setup.php
+        php "$TMP_DIR/composer-setup.php" --quiet --install-dir=/usr/local/bin --filename=composer
     fi
     composer --version
 
@@ -293,12 +298,22 @@ EOF
         info "Zertifikat existiert bereits - übersprungen"
     fi
 
+    # Die Sicherheits-Header stehen in einer eigenen Datei: Ein add_header in
+    # einem location-Block verdrängt sonst alle Header des server-Blocks.
+    install -d -m 755 /etc/nginx/snippets
+    cat >/etc/nginx/snippets/recordloom-headers.conf <<'EOF'
+# Generiert von deployLaravel/installer.sh
+add_header X-Frame-Options "SAMEORIGIN" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+EOF
     cat >/etc/nginx/sites-available/recordloom <<EOF
 # Generiert von deployLaravel/installer.sh
 server {
     listen 80 default_server;
     ${listen6_http}
     server_name _;
+    server_tokens off;
     return 301 https://\$host\$request_uri;
 }
 
@@ -306,6 +321,7 @@ server {
     listen 443 ssl default_server;
     ${listen6_https}
     server_name _;
+    server_tokens off;
     root ${APP_DIR}/public;
 
     ssl_certificate ${CERT_DIR}/recordloom.crt;
@@ -316,9 +332,7 @@ server {
     ssl_session_cache shared:SSL:10m;
     ssl_session_tickets off;
 
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    include snippets/recordloom-headers.conf;
 
     index index.php;
     charset utf-8;
@@ -334,6 +348,7 @@ server {
     location /build/ {
         expires 1y;
         access_log off;
+        include snippets/recordloom-headers.conf;
         add_header Cache-Control "public, immutable";
     }
 
@@ -346,6 +361,7 @@ server {
         fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm.sock;
         fastcgi_param SCRIPT_FILENAME \$realpath_root\$fastcgi_script_name;
         include fastcgi_params;
+        fastcgi_param HTTP_PROXY "";
         fastcgi_hide_header X-Powered-By;
         fastcgi_read_timeout 120s;
     }
@@ -437,6 +453,7 @@ EOF
     install -d -m 755 "$CONF_DIR"
     cat >"$CONF_DIR/recordloom.conf" <<EOF
 # Einstellungen für recordloom-deploy (geschrieben von deployLaravel/installer.sh).
+# Nur Zeilen der Form NAME="Wert"; die Datei wird nicht als Shell-Skript ausgeführt.
 # Änderungen bleiben bei einem erneuten Lauf des Installers erhalten.
 # Danach "recordloom-deploy" (als root) ausführen.
 APP_NAME="$APP_NAME"
@@ -458,8 +475,14 @@ EOF
     if [ -n "$script_dir" ] && [ -f "$script_dir/deploy.sh" ]; then
         install -m 755 "$script_dir/deploy.sh" /usr/local/sbin/recordloom-deploy
     else
-        curl -fsSLo /usr/local/sbin/recordloom-deploy "$DEPLOY_SCRIPT_URL"
-        chmod 755 /usr/local/sbin/recordloom-deploy
+        # Erst prüfen, dann installieren: ein abgebrochener Download soll
+        # nicht als halbes Skript in /usr/local/sbin landen.
+        curl -fsSLo "$TMP_DIR/deploy.sh" "$DEPLOY_SCRIPT_URL"
+        if ! bash -n "$TMP_DIR/deploy.sh" || ! grep -q '^main "\$@"$' "$TMP_DIR/deploy.sh"; then
+            error "Das heruntergeladene Deploy-Skript ist unvollständig ($DEPLOY_SCRIPT_URL)"
+            exit 1
+        fi
+        install -m 755 "$TMP_DIR/deploy.sh" /usr/local/sbin/recordloom-deploy
     fi
 
     # Privates Repository per SSH: ohne vorhandenen Schlüssel einen Deploy-Key
@@ -501,6 +524,43 @@ EOF
     echo "Log: $LOG_FILE"
 }
 
+# Die Werte landen in Befehlen und Dateien, die als root verwendet werden
+# (chown -R, nginx- und Cron-Konfiguration, recordloom.conf), deshalb sind
+# nur unverdächtige Zeichen erlaubt.
+validate_settings() {
+    local bad="" flag
+    [[ "$APP_NAME" =~ ^[A-Za-z0-9\ ._-]+$ ]] || bad="APP_NAME ($APP_NAME)"
+    [[ "$APP_REPO" =~ ^(git@[A-Za-z0-9.-]+:[A-Za-z0-9._/-]+|(ssh|https)://[A-Za-z0-9@._:/-]+|(file://)?/[A-Za-z0-9._/-]+)$ ]] ||
+        bad="APP_REPO ($APP_REPO)"
+    [[ "$APP_BRANCH" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ && "$APP_BRANCH" != *..* ]] || bad="APP_BRANCH ($APP_BRANCH)"
+    # Mindestens zwei Ebenen tief und kein Systemverzeichnis: APP_DIR wird
+    # rekursiv dem Webserver-Benutzer übereignet.
+    [[ "$APP_DIR" =~ ^/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$ && "$APP_DIR" != *..* ]] || bad="APP_DIR ($APP_DIR)"
+    case "$APP_DIR" in
+        /bin/* | /boot/* | /dev/* | /etc/* | /lib*/* | /proc/* | /root/* | /run/* | /sbin/* | /sys/* | /usr/* | /var/lib/* | /var/log/* | /var/backups/*)
+            bad="APP_DIR ($APP_DIR)"
+            ;;
+    esac
+    [[ -z "$APP_URL" || "$APP_URL" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._/-]*)?$ ]] || bad="APP_URL ($APP_URL)"
+    [[ "$APP_TIMEZONE" =~ ^[A-Za-z0-9_+/-]+$ ]] || bad="APP_TIMEZONE ($APP_TIMEZONE)"
+    [[ -z "$APP_SSH_KEY" || "$APP_SSH_KEY" =~ ^/[A-Za-z0-9._/@+-]+$ ]] || bad="APP_SSH_KEY ($APP_SSH_KEY)"
+    [[ -z "$APP_HOSTNAME" || "$APP_HOSTNAME" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] || bad="APP_HOSTNAME ($APP_HOSTNAME)"
+    [[ -z "$PHP_VERSION" || "$PHP_VERSION" =~ ^[0-9]+\.[0-9]+$ ]] || bad="PHP_VERSION ($PHP_VERSION)"
+    [[ "$NODE_MAJOR" =~ ^[0-9]+$ ]] || bad="NODE_MAJOR ($NODE_MAJOR)"
+    [[ "$NODE_MIN" =~ ^[0-9]+(\.[0-9]+)*$ ]] || bad="NODE_MIN ($NODE_MIN)"
+    [[ "$SWAP_SIZE_MB" =~ ^[0-9]{1,6}$ ]] || bad="SWAP_SIZE_MB ($SWAP_SIZE_MB)"
+    [[ "$KEEP_BACKUPS" =~ ^[0-9]{1,4}$ ]] || bad="KEEP_BACKUPS ($KEEP_BACKUPS)"
+    [[ "$LOCK_ROOT" =~ ^(auto|0|1)$ ]] || bad="LOCK_ROOT ($LOCK_ROOT)"
+    [[ "$DEPLOY_SCRIPT_URL" =~ ^https://[A-Za-z0-9._/-]+$ ]] || bad="DEPLOY_SCRIPT_URL ($DEPLOY_SCRIPT_URL)"
+    for flag in SEED_DEMO_DATA ENABLE_MDNS ENABLE_FIREWALL ENABLE_FAIL2BAN DISABLE_WIFI_POWERSAVE REGENERATE_SSH_KEYS; do
+        [[ "${!flag}" =~ ^[01]$ ]] || bad="$flag (${!flag})"
+    done
+    if [ -n "$bad" ]; then
+        error "Ungültige Einstellung: $bad"
+        exit 1
+    fi
+}
+
 # conf_get KEY: Wert aus /etc/recordloom/recordloom.conf (leer, wenn nicht vorhanden)
 conf_get() {
     [ -f "$CONF_DIR/recordloom.conf" ] || return 0
@@ -513,10 +573,18 @@ conf_get() {
 setup_mdns() {
     local conf=/etc/avahi/avahi-daemon.conf
     if ! dpkg -s avahi-daemon >/dev/null 2>&1; then
-        printf '#!/bin/sh\nexit 101\n' >/usr/sbin/policy-rc.d
-        chmod 755 /usr/sbin/policy-rc.d
+        # Eine vorhandene policy-rc.d (z.B. in Container-Images) verhindert
+        # den Start bereits und bleibt unangetastet.
+        local own_policy=0
+        if [ ! -e /usr/sbin/policy-rc.d ]; then
+            own_policy=1
+            printf '#!/bin/sh\nexit 101\n' >/usr/sbin/policy-rc.d
+            chmod 755 /usr/sbin/policy-rc.d
+        fi
         apt_get install avahi-daemon || true
-        rm -f /usr/sbin/policy-rc.d
+        if [ "$own_policy" = "1" ]; then
+            rm -f /usr/sbin/policy-rc.d
+        fi
     fi
     if [ -f "$conf" ]; then
         sed -i 's/^rlimit-nproc=/#rlimit-nproc=/' "$conf"

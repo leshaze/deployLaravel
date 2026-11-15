@@ -18,6 +18,7 @@ Raspberry Pi OS funktioniert weiterhin (siehe
 [Updates](#updates) ·
 [Scheduler](#scheduler-mail-backup-discogs-preise) ·
 [Umzug vom Raspberry Pi](#umzug-vom-raspberry-pi-in-den-container) ·
+[Sicherheit](#sicherheit) ·
 [Fehlersuche](#fehlersuche) ·
 [Dateien und Pfade](#dateien-und-pfade)
 
@@ -168,7 +169,10 @@ Installer erzeugen lassen. Unter Bookworm kommt PHP 8.4 aus dem Sury-Repository.
 
 `recordloom-deploy` liest seine Einstellungen aus
 **`/etc/recordloom/recordloom.conf`**. Die Datei wird vom Installer angelegt
-und kann von Hand bearbeitet werden:
+und kann von Hand bearbeitet werden. Sie ist kein Shell-Skript: Es zählen
+nur Zeilen der Form `NAME="Wert"`, und die Werte werden geprüft (z.B. muss
+`APP_DIR` mindestens zwei Ebenen tief liegen und darf kein Systemverzeichnis
+sein). Bei einem ungültigen Wert bricht das Deployment mit einer Meldung ab.
 
 ```bash
 sudo nano /etc/recordloom/recordloom.conf
@@ -211,10 +215,11 @@ gelöscht wurde), deployt das Skript mit einer Warnung `main` und setzt
 ### SSH-Schlüssel für das private Repository
 
 Git läuft als `www-data`, der Schlüssel von root ist für diesen Benutzer
-nicht lesbar. `recordloom-deploy` kopiert ihn deshalb bei jedem Lauf nach
-`/var/lib/recordloom/.ssh/` und richtet dort eine eigene SSH-Konfiguration
-ein (inklusive des Host-Schlüssels von GitHub). Der Schlüssel wird in dieser
-Reihenfolge gesucht:
+nicht lesbar. `recordloom-deploy` kopiert ihn deshalb für die Dauer des
+Deployments nach `/run/recordloom-ssh.*` (mit eigener SSH-Konfiguration und
+dem Host-Schlüssel von GitHub) und löscht die Kopie am Ende wieder. Außerhalb
+eines Deployments kann die Web-App den Schlüssel also nicht lesen. Der
+Schlüssel wird in dieser Reihenfolge gesucht:
 
 1. `APP_SSH_KEY` aus `recordloom.conf`, falls gesetzt
 2. `/etc/recordloom/deploy_key`
@@ -393,11 +398,40 @@ Eine Installation nach der alten Anleitung dieses Repositories (vor
 dass alle bisherigen Migrationen gelaufen sind:
 `sudo -u www-data php artisan migrate:status`.
 
+## Sicherheit
+
+Die App-Dateien gehören `www-data`, dem Konto, unter dem auch die Web-App
+läuft. Bei einer Lücke in der App muss dieses Konto als kompromittiert
+gelten. Die Skripte sind darauf ausgelegt, dass daraus kein Root-Zugriff
+wird:
+
+- **root schreibt nicht im App-Verzeichnis.** `recordloom-deploy` läuft als
+  root, führt aber alles, was Dateien der App anfasst (Git, Composer, npm,
+  `artisan`, `.env`, Rechte, Datenbank-Sicherung), als `www-data` aus. Ein
+  untergeschobener Symlink kann so keine Systemdatei treffen.
+- **Der SSH-Schlüssel liegt nur während des Deployments** für `www-data`
+  lesbar vor. Trotzdem am besten einen Deploy-Key verwenden (nur dieses
+  Repository, nur lesen) und nicht den persönlichen GitHub-Schlüssel.
+- **Datenbank, Uploads, Logs und `.env`** sind für andere Benutzer des
+  Systems nicht lesbar; Sicherungen liegen in einem Verzeichnis nur für root.
+- **nginx** liefert nur `public/` aus, führt ausschließlich `index.php` aus,
+  sperrt versteckte Dateien und setzt Sicherheits-Header auf allen Antworten.
+- **Einstellungen werden geprüft**, bevor sie in Befehle, Cron- oder
+  nginx-Konfiguration gelangen.
+
+Was bleibt: `www-data` kann den Code der App ändern (bis zum nächsten
+Deployment, das den Stand aus Git wiederherstellt). Der Installer vertraut
+den Paketquellen von Debian, NodeSource, Sury und Composer sowie diesem
+Repository (`curl … | bash`) über HTTPS.
+
 ## Fehlersuche
 
 | Problem                                   | Lösung                                                         |
 | ----------------------------------------- | -------------------------------------------------------------- |
 | „Kein Zugriff auf git@github.com:…“       | Deploy-Key bei GitHub hinterlegt? Mit `ssh -i <schlüssel> -T git@github.com` testen; siehe [SSH-Schlüssel](#ssh-schlüssel-für-das-private-repository) |
+| „Ungültige Einstellung: …“                | Der genannte Wert in `/etc/recordloom/recordloom.conf` bzw. beim Aufruf enthält unerlaubte Zeichen oder einen unzulässigen Pfad |
+| „Der SSH-Schlüssel … ist … mit einer Passphrase geschützt“ | Schlüssel ohne Passphrase verwenden, z.B. einen eigenen Deploy-Key (siehe [Installation](#installation)) |
+| „Es läuft bereits ein Deployment.“        | Ein anderer Lauf von `recordloom-deploy` ist noch aktiv; abwarten |
 | Installer bricht ab                       | Meldung im Terminal bzw. in `/var/log/recordloom-install.log`; der Installer kann einfach erneut gestartet werden |
 | Deploy bricht ab                          | Der Wartungsmodus wird trotzdem beendet. Fehler beheben und `sudo recordloom-deploy` erneut ausführen, bis es durchläuft – vorher können Code und Datenbank auf unterschiedlichem Stand sein |
 | Fehlerseite / HTTP 500                    | `sudo tail -n 50 /var/www/recordLoom/storage/logs/laravel-$(date +%F).log` |
@@ -446,7 +480,7 @@ daneben verwendet.
 | --------------------------- | ----------------------------------------------------- |
 | Einstellungen des Deploys   | `/etc/recordloom/recordloom.conf`                     |
 | Deploy-Key (privat / öffentlich) | `/etc/recordloom/deploy_key`, `/etc/recordloom/deploy_key.pub` |
-| SSH-Kopie für `www-data`    | `/var/lib/recordloom/.ssh/`                           |
+| SSH-Kopie während des Deployments | `/run/recordloom-ssh.*` (wird danach gelöscht)   |
 | Deploy-Skript               | `/usr/local/sbin/recordloom-deploy`                   |
 | App                         | `/var/www/recordLoom`                                 |
 | Konfiguration der App       | `/var/www/recordLoom/.env`                            |
