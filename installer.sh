@@ -490,8 +490,19 @@ EOF
     # noch nicht deployt.
     case "$APP_REPO" in
         git@* | ssh://*)
-            if [ -z "$APP_SSH_KEY" ] && [ ! -f "$CONF_DIR/deploy_key" ] &&
-                [ ! -f /root/.ssh/id_ed25519 ] && [ ! -f /root/.ssh/id_rsa ]; then
+            # Dieselben Orte, an denen recordloom-deploy einen Schlüssel sucht.
+            local key_found=0 key sudo_home=""
+            if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+                sudo_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+            fi
+            for key in "$APP_SSH_KEY" "$CONF_DIR/deploy_key" /root/.ssh/id_ed25519 /root/.ssh/id_rsa \
+                ${sudo_home:+"$sudo_home/.ssh/id_ed25519" "$sudo_home/.ssh/id_rsa"}; do
+                if [ -n "$key" ] && [ -f "$key" ]; then
+                    key_found=1
+                    break
+                fi
+            done
+            if [ -z "$APP_SSH_KEY" ] && [ "$key_found" = "0" ]; then
                 step "Deploy-Key für das private Repository erzeugen"
                 ssh-keygen -q -t ed25519 -N "" -C "recordloom-deploy@$(hostname)" -f "$CONF_DIR/deploy_key"
                 chmod 600 "$CONF_DIR/deploy_key"

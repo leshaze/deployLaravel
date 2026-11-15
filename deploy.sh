@@ -4,7 +4,8 @@
 # /usr/local/sbin/recordloom-deploy installiert und kann jederzeit erneut
 # ausgeführt werden, um den aktuellen Stand aus Git einzuspielen:
 #
-#   sudo recordloom-deploy
+#   sudo recordloom-deploy            # nur wenn sich etwas geändert hat
+#   sudo recordloom-deploy --force    # immer neu bauen
 #
 # Einstellungen stehen in /etc/recordloom/recordloom.conf und können per
 # Umgebungsvariable überschrieben werden.
@@ -15,10 +16,28 @@
 # könnte: Alle Schreibzugriffe dort laufen über as_app als www-data.
 
 CONF_FILE=/etc/recordloom/recordloom.conf
+STATE_FILE=/etc/recordloom/last-deploy
+LOG_FILE=/var/log/recordloom-deploy.log
 
 main() {
     set -Eeuo pipefail
     exec </dev/null
+
+    local force=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+            -f | --force) force=1 ;;
+            -h | --help)
+                echo "Aufruf: recordloom-deploy [--force]"
+                echo "  --force  auch dann neu bauen, wenn sich nichts geändert hat"
+                exit 0
+                ;;
+            *)
+                echo "Unbekannte Option: $arg (siehe --help)" >&2
+                exit 2
+                ;;
+        esac
+    done
 
     if [ "$(id -u)" -ne 0 ]; then
         echo "Bitte als root bzw. mit sudo ausführen." >&2
@@ -54,6 +73,11 @@ main() {
         echo "Es läuft bereits ein Deployment." >&2
         exit 1
     fi
+
+    touch "$LOG_FILE"
+    chmod 640 "$LOG_FILE"
+    exec > >(tee -a "$LOG_FILE") 2>&1
+    echo "===== $(date '+%F %T') recordloom-deploy $* ====="
 
     PHP_BIN="php${PHP_VERSION}"
     command -v "$PHP_BIN" >/dev/null || PHP_BIN=php
@@ -127,6 +151,18 @@ main() {
         as_app git remote set-url origin "$APP_REPO"
         as_app git fetch --prune origin "+refs/heads/$APP_BRANCH:refs/remotes/origin/$APP_BRANCH"
 
+        # Nichts zu tun, wenn seit dem letzten erfolgreichen Lauf weder Code
+        # noch Einstellungen, .env, PHP oder Node.js geändert wurden.
+        if [ "$force" = "0" ] && [ -f "$STATE_FILE" ] &&
+            [ -z "$(as_app git status --porcelain --untracked-files=no)" ] &&
+            [ "$(as_app git rev-parse HEAD)" = "$(as_app git rev-parse "origin/$APP_BRANCH")" ] &&
+            [ "$(cat "$STATE_FILE")" = "$(deploy_signature)" ]; then
+            trap - ERR
+            info "Stand: $(as_app git log -1 --format='%h %s (%ci)')"
+            step "Bereits aktuell - nichts zu tun (neu bauen mit: recordloom-deploy --force)"
+            exit 0
+        fi
+
         if [ -f vendor/autoload.php ] && [ -f .env ]; then
             step "Wartungsmodus aktivieren"
             if as_app "$PHP_BIN" artisan down --retry=15; then
@@ -194,8 +230,17 @@ main() {
         as_app "$PHP_BIN" artisan key:generate --force
     fi
 
-    step "Frontend bauen (npm ci + vite build)"
-    as_app npm ci --no-audit --no-fund
+    step "Frontend bauen"
+    # npm ci löscht node_modules und installiert alles neu - das dauert und
+    # ist nur nötig, wenn sich package-lock.json oder Node.js geändert hat.
+    local lock_sig
+    lock_sig="$(as_app sha256sum package-lock.json | cut -d' ' -f1) $(node -v)"
+    if [ -d node_modules ] && [ "$(as_app cat node_modules/.recordloom-lock 2>/dev/null || true)" = "$lock_sig" ]; then
+        info "package-lock.json unverändert - npm ci übersprungen"
+    else
+        as_app npm ci --no-audit --no-fund
+        printf '%s\n' "$lock_sig" | as_app tee node_modules/.recordloom-lock >/dev/null
+    fi
     as_app npm run build
 
     if [ -s database/database.sqlite ]; then
@@ -268,13 +313,23 @@ EOF
 
     trap - ERR
     if command -v curl >/dev/null && systemctl is-active --quiet nginx 2>/dev/null; then
-        if curl -skf -o /dev/null --max-time 30 https://localhost/up; then
-            step "Healthcheck OK - Deployment abgeschlossen"
-        else
+        # PHP-FPM braucht nach dem Neuladen einen Moment.
+        local ok=0
+        for _ in 1 2 3 4 5; do
+            if curl -skf -o /dev/null --max-time 10 https://localhost/up; then
+                ok=1
+                break
+            fi
+            sleep 2
+        done
+        if [ "$ok" = "0" ]; then
             warn "Healthcheck https://localhost/up fehlgeschlagen - siehe $APP_DIR/storage/logs"
             exit 1
         fi
+        deploy_signature >"$STATE_FILE"
+        step "Healthcheck OK - Deployment abgeschlossen"
     else
+        deploy_signature >"$STATE_FILE"
         step "Deployment abgeschlossen"
     fi
 }
@@ -394,6 +449,26 @@ EOF
     APP_GIT_SSH="ssh -F $SSH_TMP/config"
 }
 
+# Kennung des Zustands, der zuletzt erfolgreich deployt wurde: Commit, dieses
+# Skript, Einstellungen, .env sowie PHP- und Node.js-Version.
+deploy_signature() {
+    local script="${BASH_SOURCE[0]:-}" script_sum conf_sum=""
+    # Ohne lesbare Skriptdatei (z.B. "curl | bash") nie überspringen.
+    script_sum="$(date +%s%N)"
+    if [ -f "$script" ]; then
+        script_sum="$(sha256sum <"$script" | cut -d' ' -f1)"
+    fi
+    if [ -f "$CONF_FILE" ]; then
+        conf_sum="$(sha256sum <"$CONF_FILE" | cut -d' ' -f1)"
+    fi
+    echo "commit=$(as_app git rev-parse HEAD)"
+    echo "script=$script_sum"
+    echo "conf=$conf_sum"
+    echo "settings=$APP_BRANCH $APP_REPO $APP_URL $APP_TIMEZONE"
+    echo "env=$(as_app sha256sum .env 2>/dev/null | cut -d' ' -f1)"
+    echo "php=$("$PHP_BIN" -r 'echo PHP_VERSION;') node=$(node -v)"
+}
+
 # prune_backups MUSTER: nur die neuesten KEEP_BACKUPS Dateien behalten
 prune_backups() {
     find "$BACKUP_DIR" -maxdepth 1 -type f -name "$1" -printf '%T@ %p\n' |
@@ -467,7 +542,7 @@ on_exit() {
         rm -rf "$SSH_TMP"
     fi
     if [ "$rc" -ne 0 ]; then
-        error "Deployment fehlgeschlagen (Exit-Code $rc)"
+        error "Deployment fehlgeschlagen (Exit-Code $rc) - Protokoll: $LOG_FILE"
     fi
 }
 

@@ -266,24 +266,31 @@ cd /var/www/recordLoom && sudo -u www-data php artisan optimize
 ## Updates
 
 ```bash
-sudo recordloom-deploy
+sudo recordloom-deploy            # nur, wenn sich etwas geändert hat
+sudo recordloom-deploy --force    # immer alles neu bauen
 ```
 
-Das Skript
+Das Skript holt zuerst den neuesten Stand aus Git. Hat sich seit dem letzten
+erfolgreichen Lauf nichts geändert (Code, `recordloom.conf`, `.env`,
+Deploy-Skript, PHP- und Node.js-Version), endet es nach wenigen Sekunden mit
+„Bereits aktuell“, ohne Wartungsmodus. Sonst
 
-1. schaltet den Wartungsmodus ein,
-2. setzt den Code auf den Stand von `origin/<APP_BRANCH>`. Lokale Änderungen
+1. schaltet es den Wartungsmodus ein,
+2. setzt es den Code auf den Stand von `origin/<APP_BRANCH>`. Lokale Änderungen
    am Code werden vorher als Patch nach `/var/backups/recordloom/`
    gesichert und dann verworfen; `.env`, Datenbank und Cover bleiben erhalten,
-3. führt `composer install --no-dev`, `npm ci` und `npm run build` aus,
-4. sichert die SQLite-Datenbank nach `/var/backups/recordloom/`,
-5. führt `php artisan migrate --force` aus,
-6. baut die Laravel-Caches neu (`php artisan optimize`), schreibt den
+3. führt es `composer install --no-dev` und `npm run build` aus; `npm ci`
+   läuft nur, wenn sich `package-lock.json` oder Node.js geändert hat,
+4. sichert es die SQLite-Datenbank nach `/var/backups/recordloom/`,
+5. führt es `php artisan migrate --force` aus,
+6. baut es die Laravel-Caches neu (`php artisan optimize`), schreibt den
    Cronjob für den Scheduler und lädt PHP-FPM neu,
-7. beendet den Wartungsmodus (auch wenn ein Schritt fehlschlägt) und prüft
-   `https://localhost/up`.
+7. beendet es den Wartungsmodus (auch wenn ein Schritt fehlschlägt) und
+   prüft `https://localhost/up`.
 
-Alle Befehle laufen als `www-data`, dem Besitzer der App-Dateien.
+Alle Befehle an der App laufen als `www-data`, dem Besitzer der App-Dateien.
+Die Ausgabe jedes Laufs wird an `/var/log/recordloom-deploy.log` angehängt.
+Es läuft immer nur ein Deployment gleichzeitig.
 
 `recordloom-deploy` ist eine Kopie von `deploy.sh`. Neue Versionen des
 Skripts kommen auf das System, wenn der Installer erneut läuft, oder direkt mit:
@@ -375,7 +382,7 @@ cp -a /root/vom-pi/storage/app/private/. storage/app/private/
 cp /root/vom-pi/.env .env
 chown -R www-data:www-data database storage .env
 nano .env        # APP_URL prüfen (wie in /etc/recordloom/recordloom.conf)
-recordloom-deploy
+recordloom-deploy --force
 ```
 
 Die alte `.env` bringt `APP_KEY` sowie die Mail-, Backup- und
@@ -433,9 +440,10 @@ Repository (`curl … | bash`) über HTTPS.
 | „Der SSH-Schlüssel … ist … mit einer Passphrase geschützt“ | Schlüssel ohne Passphrase verwenden, z.B. einen eigenen Deploy-Key (siehe [Installation](#installation)) |
 | „Es läuft bereits ein Deployment.“        | Ein anderer Lauf von `recordloom-deploy` ist noch aktiv; abwarten |
 | Installer bricht ab                       | Meldung im Terminal bzw. in `/var/log/recordloom-install.log`; der Installer kann einfach erneut gestartet werden |
-| Deploy bricht ab                          | Der Wartungsmodus wird trotzdem beendet. Fehler beheben und `sudo recordloom-deploy` erneut ausführen, bis es durchläuft – vorher können Code und Datenbank auf unterschiedlichem Stand sein |
+| Deploy bricht ab                          | Die Ausgabe steht auch in `/var/log/recordloom-deploy.log`. Der Wartungsmodus wird trotzdem beendet. Fehler beheben und `sudo recordloom-deploy` erneut ausführen, bis es durchläuft – vorher können Code und Datenbank auf unterschiedlichem Stand sein |
 | Fehlerseite / HTTP 500                    | `sudo tail -n 50 /var/www/recordLoom/storage/logs/laravel-$(date +%F).log` |
-| `.env` geändert, aber keine Wirkung       | `cd /var/www/recordLoom && sudo -u www-data php artisan optimize` |
+| `.env` geändert, aber keine Wirkung       | `sudo recordloom-deploy` (erkennt die Änderung) oder schneller `cd /var/www/recordLoom && sudo -u www-data php artisan optimize` |
+| „Bereits aktuell“, es soll aber neu gebaut werden | `sudo recordloom-deploy --force`               |
 | Warnung „Node.js … ist älter als 24“      | Installer erneut ausführen                                     |
 | Im Container starten Dienste nicht (z.B. nginx, php-fpm, cron) | In Proxmox unter *Container → Options → Features* **Nesting** aktivieren und den Container neu starten |
 | App im Netz nicht erreichbar              | Proxmox-Firewall des Containers bzw. Datacenters: TCP 80 und 443 erlauben |
@@ -456,8 +464,8 @@ sudo chown www-data:www-data database/database.sqlite
 sudo -u www-data php artisan up
 ```
 
-Stammt die Sicherung von vor einem Update, danach `sudo recordloom-deploy`
-ausführen, damit die Migrationen des aktuellen Codes erneut auf die
+Stammt die Sicherung von vor einem Update, danach
+`sudo recordloom-deploy --force` ausführen, damit die Migrationen des aktuellen Codes erneut auf die
 Datenbank angewendet werden.
 
 ### Skripte aus einem anderen Branch von deployLaravel testen
@@ -490,6 +498,8 @@ daneben verwendet.
 | Datenbank-Sicherungen, Patches | `/var/backups/recordloom/`                         |
 | Scheduler-Cronjob           | `/etc/cron.d/recordloom`                              |
 | Installer-Protokoll         | `/var/log/recordloom-install.log`                     |
+| Deploy-Protokoll            | `/var/log/recordloom-deploy.log`                      |
+| Zuletzt deployter Stand     | `/etc/recordloom/last-deploy`                         |
 | nginx                       | `/etc/nginx/sites-available/recordloom`               |
 | Zertifikat                  | `/etc/ssl/recordloom/`                                |
 | PHP-Einstellungen           | `/etc/php/<Version>/fpm/conf.d/99-recordloom.ini`     |
