@@ -18,6 +18,7 @@ Raspberry Pi OS funktioniert weiterhin (siehe
 [Updates](#updates) ·
 [Scheduler](#scheduler-mail-backup-discogs-preise) ·
 [Umzug vom Raspberry Pi](#umzug-vom-raspberry-pi-in-den-container) ·
+[Sicherheit](#sicherheit) ·
 [Fehlersuche](#fehlersuche) ·
 [Dateien und Pfade](#dateien-und-pfade)
 
@@ -40,13 +41,37 @@ PHP ≥ 8.4 (in Debian 13 enthalten) und Node.js ≥ 24 (kommt von NodeSource).
 ## Installation
 
 Container starten und als root eine Konsole öffnen (Proxmox-Oberfläche
-*Console* oder `pct enter <ID>` auf dem Proxmox-Host). Im Debian-Template
-fehlt eventuell `curl`, deshalb zuerst:
+*Console* oder `pct enter <ID>` auf dem Proxmox-Host).
+
+**1. Deploy-Key für das private Repository anlegen.** recordLoom ist privat,
+der Container braucht deshalb einen SSH-Schlüssel mit Lesezugriff:
 
 ```bash
-apt update && apt install -y curl
+apt update && apt install -y curl openssh-client
+mkdir -p /etc/recordloom
+ssh-keygen -t ed25519 -N "" -C "recordloom-deploy@$(hostname)" -f /etc/recordloom/deploy_key
+cat /etc/recordloom/deploy_key.pub
+```
+
+Die ausgegebene Zeile bei GitHub eintragen: recordLoom → *Settings → Deploy
+keys → Add deploy key*, **ohne** „Allow write access“. Ein Deploy-Key gilt
+nur für dieses eine Repository und kann nur lesen. Der Schlüssel darf keine
+Passphrase haben, weil das Deploy-Skript ohne Rückfragen läuft.
+
+Gibt es auf dem System schon einen passenden Schlüssel (z.B.
+`/root/.ssh/id_ed25519`, der bei GitHub hinterlegt ist), kann dieser Schritt
+entfallen, siehe [SSH-Schlüssel](#ssh-schlüssel-für-das-private-repository).
+
+**2. Installer starten:**
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/main/installer.sh | bash
 ```
+
+Findet der Installer keinen Schlüssel, erzeugt er selbst
+`/etc/recordloom/deploy_key`, zeigt den öffentlichen Schlüssel an und hält
+vor dem Deployment an. Nach dem Eintragen bei GitHub die Installation mit
+`recordloom-deploy` abschließen.
 
 Der Installer läuft ohne Rückfragen durch (10–20 Minuten) und endet mit der
 Adresse der App, z.B. `https://recordloom.local` (zusätzlich ist sie über
@@ -87,7 +112,8 @@ auch `sudo` ein; als root kann es vor den Befehlen entfallen.
    nginx-Seiten für die App werden deaktiviert. IPv6 wird nur verwendet,
    wenn der Container es hat.
 5. `/etc/recordloom/recordloom.conf` schreiben, `recordloom-deploy`
-   installieren und die App deployen
+   installieren und die App deployen (ohne SSH-Schlüssel vorher einen
+   Deploy-Key erzeugen, siehe oben)
 
 Im Container erkennt der Installer, dass er nicht auf echter Hardware läuft,
 und lässt alles weg, was dort Sache von Proxmox ist:
@@ -135,14 +161,18 @@ ausführen:
 curl -fsSL https://raw.githubusercontent.com/leshaze/deployLaravel/main/installer.sh | sudo bash
 ```
 
-Unter Bookworm kommt PHP 8.4 aus dem Sury-Repository. Ein 32-bit-System
+Den Deploy-Key wie oben anlegen (mit `sudo` vor den Befehlen) oder vom
+Installer erzeugen lassen. Unter Bookworm kommt PHP 8.4 aus dem Sury-Repository. Ein 32-bit-System
 (`armhf`) funktioniert nicht, weil es Node.js 24 dafür nicht gibt.
 
 ## Konfiguration
 
 `recordloom-deploy` liest seine Einstellungen aus
 **`/etc/recordloom/recordloom.conf`**. Die Datei wird vom Installer angelegt
-und kann von Hand bearbeitet werden:
+und kann von Hand bearbeitet werden. Sie ist kein Shell-Skript: Es zählen
+nur Zeilen der Form `NAME="Wert"`, und die Werte werden geprüft (z.B. muss
+`APP_DIR` mindestens zwei Ebenen tief liegen und darf kein Systemverzeichnis
+sein). Bei einem ungültigen Wert bricht das Deployment mit einer Meldung ab.
 
 ```bash
 sudo nano /etc/recordloom/recordloom.conf
@@ -152,7 +182,8 @@ sudo recordloom-deploy
 | Variable         | Standard                                    | Bedeutung                                                   |
 | ---------------- | ------------------------------------------- | ----------------------------------------------------------- |
 | `APP_BRANCH`     | `main`                                      | Branch von recordLoom, der deployt wird                     |
-| `APP_REPO`       | `https://github.com/leshaze/recordLoom.git` | Git-Repository der App                                      |
+| `APP_REPO`       | `git@github.com:leshaze/recordLoom.git`     | Git-Repository der App (SSH)                                |
+| `APP_SSH_KEY`    | *(automatisch)*                             | Privater SSH-Schlüssel für das Repository, siehe unten      |
 | `APP_DIR`        | `/var/www/recordLoom`                       | Installationsverzeichnis                                    |
 | `APP_URL`        | *(vom Installer)*                           | Adresse der App (für die `.env` einer Neuinstallation)      |
 | `APP_NAME`       | `recordLoom`                                | Name der App (für die `.env` einer Neuinstallation)         |
@@ -181,6 +212,40 @@ Existiert der eingestellte Branch nicht mehr (z.B. weil er gemergt und
 gelöscht wurde), deployt das Skript mit einer Warnung `main` und setzt
 `APP_BRANCH` in der Datei auf `main` zurück.
 
+### SSH-Schlüssel für das private Repository
+
+Git läuft als `www-data`, der Schlüssel von root ist für diesen Benutzer
+nicht lesbar. `recordloom-deploy` kopiert ihn deshalb für die Dauer des
+Deployments nach `/run/recordloom-ssh.*` (mit eigener SSH-Konfiguration und
+dem Host-Schlüssel von GitHub) und löscht die Kopie am Ende wieder. Außerhalb
+eines Deployments kann die Web-App den Schlüssel also nicht lesen. Der
+Schlüssel wird in dieser Reihenfolge gesucht:
+
+1. `APP_SSH_KEY` aus `recordloom.conf`, falls gesetzt
+2. `/etc/recordloom/deploy_key`
+3. `/root/.ssh/id_ed25519`, `/root/.ssh/id_rsa`
+4. bei Aufruf mit `sudo`: `~/.ssh/id_ed25519` bzw. `~/.ssh/id_rsa` des
+   aufrufenden Benutzers
+
+Welchem Benutzer der Schlüssel gehört, ist egal: Das Skript läuft als root
+und kann ihn überall lesen. Liegt er woanders oder wird `recordloom-deploy`
+direkt als root bzw. per Cron gestartet, den Pfad in `recordloom.conf`
+eintragen:
+
+```bash
+APP_SSH_KEY="/home/pi/.ssh/id_ed25519"
+```
+
+Zugriff testen:
+
+```bash
+ssh -i /etc/recordloom/deploy_key -T git@github.com
+```
+
+GitHub antwortet mit „Hi leshaze/recordLoom! You've successfully
+authenticated …“. Ältere Installationen mit der früheren HTTPS-Adresse
+stellt `recordloom-deploy` automatisch auf SSH um.
+
 ### Konfiguration der App (`.env`)
 
 Die Einstellungen von recordLoom selbst stehen in `/var/www/recordLoom/.env`.
@@ -201,24 +266,31 @@ cd /var/www/recordLoom && sudo -u www-data php artisan optimize
 ## Updates
 
 ```bash
-sudo recordloom-deploy
+sudo recordloom-deploy            # nur, wenn sich etwas geändert hat
+sudo recordloom-deploy --force    # immer alles neu bauen
 ```
 
-Das Skript
+Das Skript holt zuerst den neuesten Stand aus Git. Hat sich seit dem letzten
+erfolgreichen Lauf nichts geändert (Code, `recordloom.conf`, `.env`,
+Deploy-Skript, PHP- und Node.js-Version), endet es nach wenigen Sekunden mit
+„Bereits aktuell“, ohne Wartungsmodus. Sonst
 
-1. schaltet den Wartungsmodus ein,
-2. setzt den Code auf den Stand von `origin/<APP_BRANCH>`. Lokale Änderungen
+1. schaltet es den Wartungsmodus ein,
+2. setzt es den Code auf den Stand von `origin/<APP_BRANCH>`. Lokale Änderungen
    am Code werden vorher als Patch nach `/var/backups/recordloom/`
    gesichert und dann verworfen; `.env`, Datenbank und Cover bleiben erhalten,
-3. führt `composer install --no-dev`, `npm ci` und `npm run build` aus,
-4. sichert die SQLite-Datenbank nach `/var/backups/recordloom/`,
-5. führt `php artisan migrate --force` aus,
-6. baut die Laravel-Caches neu (`php artisan optimize`), schreibt den
+3. führt es `composer install --no-dev` und `npm run build` aus; `npm ci`
+   läuft nur, wenn sich `package-lock.json` oder Node.js geändert hat,
+4. sichert es die SQLite-Datenbank nach `/var/backups/recordloom/`,
+5. führt es `php artisan migrate --force` aus,
+6. baut es die Laravel-Caches neu (`php artisan optimize`), schreibt den
    Cronjob für den Scheduler und lädt PHP-FPM neu,
-7. beendet den Wartungsmodus (auch wenn ein Schritt fehlschlägt) und prüft
-   `https://localhost/up`.
+7. beendet es den Wartungsmodus (auch wenn ein Schritt fehlschlägt) und
+   prüft `https://localhost/up`.
 
-Alle Befehle laufen als `www-data`, dem Besitzer der App-Dateien.
+Alle Befehle an der App laufen als `www-data`, dem Besitzer der App-Dateien.
+Die Ausgabe jedes Laufs wird an `/var/log/recordloom-deploy.log` angehängt.
+Es läuft immer nur ein Deployment gleichzeitig.
 
 `recordloom-deploy` ist eine Kopie von `deploy.sh`. Neue Versionen des
 Skripts kommen auf das System, wenn der Installer erneut läuft, oder direkt mit:
@@ -310,7 +382,7 @@ cp -a /root/vom-pi/storage/app/private/. storage/app/private/
 cp /root/vom-pi/.env .env
 chown -R www-data:www-data database storage .env
 nano .env        # APP_URL prüfen (wie in /etc/recordloom/recordloom.conf)
-recordloom-deploy
+recordloom-deploy --force
 ```
 
 Die alte `.env` bringt `APP_KEY` sowie die Mail-, Backup- und
@@ -333,14 +405,45 @@ Eine Installation nach der alten Anleitung dieses Repositories (vor
 dass alle bisherigen Migrationen gelaufen sind:
 `sudo -u www-data php artisan migrate:status`.
 
+## Sicherheit
+
+Die App-Dateien gehören `www-data`, dem Konto, unter dem auch die Web-App
+läuft. Bei einer Lücke in der App muss dieses Konto als kompromittiert
+gelten. Die Skripte sind darauf ausgelegt, dass daraus kein Root-Zugriff
+wird:
+
+- **root schreibt nicht im App-Verzeichnis.** `recordloom-deploy` läuft als
+  root, führt aber alles, was Dateien der App anfasst (Git, Composer, npm,
+  `artisan`, `.env`, Rechte, Datenbank-Sicherung), als `www-data` aus. Ein
+  untergeschobener Symlink kann so keine Systemdatei treffen.
+- **Der SSH-Schlüssel liegt nur während des Deployments** für `www-data`
+  lesbar vor. Trotzdem am besten einen Deploy-Key verwenden (nur dieses
+  Repository, nur lesen) und nicht den persönlichen GitHub-Schlüssel.
+- **Datenbank, Uploads, Logs und `.env`** sind für andere Benutzer des
+  Systems nicht lesbar; Sicherungen liegen in einem Verzeichnis nur für root.
+- **nginx** liefert nur `public/` aus, führt ausschließlich `index.php` aus,
+  sperrt versteckte Dateien und setzt Sicherheits-Header auf allen Antworten.
+- **Einstellungen werden geprüft**, bevor sie in Befehle, Cron- oder
+  nginx-Konfiguration gelangen.
+
+Was bleibt: `www-data` kann den Code der App ändern (bis zum nächsten
+Deployment, das den Stand aus Git wiederherstellt). Der Installer vertraut
+den Paketquellen von Debian, NodeSource, Sury und Composer sowie diesem
+Repository (`curl … | bash`) über HTTPS.
+
 ## Fehlersuche
 
 | Problem                                   | Lösung                                                         |
 | ----------------------------------------- | -------------------------------------------------------------- |
+| „Kein Zugriff auf git@github.com:…“       | Deploy-Key bei GitHub hinterlegt? Mit `ssh -i <schlüssel> -T git@github.com` testen; siehe [SSH-Schlüssel](#ssh-schlüssel-für-das-private-repository) |
+| „Ungültige Einstellung: …“                | Der genannte Wert in `/etc/recordloom/recordloom.conf` bzw. beim Aufruf enthält unerlaubte Zeichen oder einen unzulässigen Pfad |
+| „Der SSH-Schlüssel … ist … mit einer Passphrase geschützt“ | Schlüssel ohne Passphrase verwenden, z.B. einen eigenen Deploy-Key (siehe [Installation](#installation)) |
+| „Es läuft bereits ein Deployment.“        | Ein anderer Lauf von `recordloom-deploy` ist noch aktiv; abwarten |
 | Installer bricht ab                       | Meldung im Terminal bzw. in `/var/log/recordloom-install.log`; der Installer kann einfach erneut gestartet werden |
-| Deploy bricht ab                          | Der Wartungsmodus wird trotzdem beendet. Fehler beheben und `sudo recordloom-deploy` erneut ausführen, bis es durchläuft – vorher können Code und Datenbank auf unterschiedlichem Stand sein |
+| Deploy bricht ab                          | Die Ausgabe steht auch in `/var/log/recordloom-deploy.log`. Der Wartungsmodus wird trotzdem beendet. Fehler beheben und `sudo recordloom-deploy` erneut ausführen, bis es durchläuft – vorher können Code und Datenbank auf unterschiedlichem Stand sein |
 | Fehlerseite / HTTP 500                    | `sudo tail -n 50 /var/www/recordLoom/storage/logs/laravel-$(date +%F).log` |
-| `.env` geändert, aber keine Wirkung       | `cd /var/www/recordLoom && sudo -u www-data php artisan optimize` |
+| `.env` geändert, aber keine Wirkung       | `sudo recordloom-deploy` (erkennt die Änderung) oder schneller `cd /var/www/recordLoom && sudo -u www-data php artisan optimize` |
+| „Bereits aktuell“, es soll aber neu gebaut werden | `sudo recordloom-deploy --force`               |
 | Warnung „Node.js … ist älter als 24“      | Installer erneut ausführen                                     |
 | Im Container starten Dienste nicht (z.B. nginx, php-fpm, cron) | In Proxmox unter *Container → Options → Features* **Nesting** aktivieren und den Container neu starten |
 | App im Netz nicht erreichbar              | Proxmox-Firewall des Containers bzw. Datacenters: TCP 80 und 443 erlauben |
@@ -361,8 +464,8 @@ sudo chown www-data:www-data database/database.sqlite
 sudo -u www-data php artisan up
 ```
 
-Stammt die Sicherung von vor einem Update, danach `sudo recordloom-deploy`
-ausführen, damit die Migrationen des aktuellen Codes erneut auf die
+Stammt die Sicherung von vor einem Update, danach
+`sudo recordloom-deploy --force` ausführen, damit die Migrationen des aktuellen Codes erneut auf die
 Datenbank angewendet werden.
 
 ### Skripte aus einem anderen Branch von deployLaravel testen
@@ -384,6 +487,8 @@ daneben verwendet.
 | Was                         | Pfad                                                  |
 | --------------------------- | ----------------------------------------------------- |
 | Einstellungen des Deploys   | `/etc/recordloom/recordloom.conf`                     |
+| Deploy-Key (privat / öffentlich) | `/etc/recordloom/deploy_key`, `/etc/recordloom/deploy_key.pub` |
+| SSH-Kopie während des Deployments | `/run/recordloom-ssh.*` (wird danach gelöscht)   |
 | Deploy-Skript               | `/usr/local/sbin/recordloom-deploy`                   |
 | App                         | `/var/www/recordLoom`                                 |
 | Konfiguration der App       | `/var/www/recordLoom/.env`                            |
@@ -393,6 +498,8 @@ daneben verwendet.
 | Datenbank-Sicherungen, Patches | `/var/backups/recordloom/`                         |
 | Scheduler-Cronjob           | `/etc/cron.d/recordloom`                              |
 | Installer-Protokoll         | `/var/log/recordloom-install.log`                     |
+| Deploy-Protokoll            | `/var/log/recordloom-deploy.log`                      |
+| Zuletzt deployter Stand     | `/etc/recordloom/last-deploy`                         |
 | nginx                       | `/etc/nginx/sites-available/recordloom`               |
 | Zertifikat                  | `/etc/ssl/recordloom/`                                |
 | PHP-Einstellungen           | `/etc/php/<Version>/fpm/conf.d/99-recordloom.ini`     |
