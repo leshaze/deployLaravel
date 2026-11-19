@@ -34,6 +34,8 @@ main() {
     APP_URL="${APP_URL:-$(conf_get APP_URL)}"
     KEEP_BACKUPS="${KEEP_BACKUPS:-$(conf_get KEEP_BACKUPS)}"
     KEEP_BACKUPS="${KEEP_BACKUPS:-14}"
+    MAIL_BACKUP_BEFORE_DEPLOY="${MAIL_BACKUP_BEFORE_DEPLOY:-$(conf_get MAIL_BACKUP_BEFORE_DEPLOY)}"
+    MAIL_BACKUP_BEFORE_DEPLOY="${MAIL_BACKUP_BEFORE_DEPLOY:-1}"
     APP_NAME="${APP_NAME:-recordLoom}"
     # recordLoom ist privat: Zugriff per SSH mit Deploy-Key (siehe README).
     # Die frühere HTTPS-Adresse funktioniert ohne Anmeldung nicht mehr.
@@ -467,6 +469,7 @@ PHP_VERSION="$PHP_VERSION"
 NODE_MIN="$NODE_MIN"
 SEED_DEMO_DATA="$SEED_DEMO_DATA"
 KEEP_BACKUPS="$KEEP_BACKUPS"
+MAIL_BACKUP_BEFORE_DEPLOY="$MAIL_BACKUP_BEFORE_DEPLOY"
 EOF
     local script_dir=""
     if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
@@ -563,7 +566,7 @@ validate_settings() {
     [[ "$KEEP_BACKUPS" =~ ^[0-9]{1,4}$ ]] || bad="KEEP_BACKUPS ($KEEP_BACKUPS)"
     [[ "$LOCK_ROOT" =~ ^(auto|0|1)$ ]] || bad="LOCK_ROOT ($LOCK_ROOT)"
     [[ "$DEPLOY_SCRIPT_URL" =~ ^https://[A-Za-z0-9._/-]+$ ]] || bad="DEPLOY_SCRIPT_URL ($DEPLOY_SCRIPT_URL)"
-    for flag in SEED_DEMO_DATA ENABLE_MDNS ENABLE_FIREWALL ENABLE_FAIL2BAN DISABLE_WIFI_POWERSAVE REGENERATE_SSH_KEYS; do
+    for flag in SEED_DEMO_DATA MAIL_BACKUP_BEFORE_DEPLOY ENABLE_MDNS ENABLE_FIREWALL ENABLE_FAIL2BAN DISABLE_WIFI_POWERSAVE REGENERATE_SSH_KEYS; do
         [[ "${!flag}" =~ ^[01]$ ]] || bad="$flag (${!flag})"
     done
     if [ -n "$bad" ]; then

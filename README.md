@@ -190,6 +190,7 @@ sudo recordloom-deploy
 | `APP_TIMEZONE`   | `Europe/Berlin`                             | Zeitzone (für die `.env` einer Neuinstallation)             |
 | `KEEP_BACKUPS`   | `14`                                        | Anzahl der aufbewahrten Datenbank-Sicherungen               |
 | `SEED_DEMO_DATA` | `0`                                         | `1` = Demodaten bei der Erstinstallation einspielen         |
+| `MAIL_BACKUP_BEFORE_DEPLOY` | `1`                              | `1` = vor jedem Update die Datenbank per Mail schicken, siehe [Updates](#updates) |
 | `PHP_VERSION`    | *(vom Installer)*                           | PHP-Version, mit der `artisan` ausgeführt wird              |
 | `NODE_MIN`       | *(vom Installer)*                           | Unterhalb dieser Node.js-Version warnt das Deploy-Skript    |
 
@@ -268,6 +269,7 @@ cd /var/www/recordLoom && sudo -u www-data php artisan optimize
 ```bash
 sudo recordloom-deploy            # nur, wenn sich etwas geändert hat
 sudo recordloom-deploy --force    # immer alles neu bauen
+sudo recordloom-deploy --no-mail-backup   # einmalig ohne Mail-Backup vorab
 ```
 
 Das Skript holt zuerst den neuesten Stand aus Git. Hat sich seit dem letzten
@@ -276,16 +278,27 @@ Deploy-Skript, PHP- und Node.js-Version), endet es nach wenigen Sekunden mit
 „Bereits aktuell“, ohne Wartungsmodus. Sonst
 
 1. schaltet es den Wartungsmodus ein,
-2. setzt es den Code auf den Stand von `origin/<APP_BRANCH>`. Lokale Änderungen
+2. schickt es die aktuelle Datenbank per Mail, genau wie das tägliche
+   Mail-Backup des Schedulers (`php artisan backup:mail --force`, also auch
+   ohne Änderung seit dem letzten Backup). **Nur wenn die Mail verschickt
+   wurde, geht es weiter.** Schlägt der Versand fehl (z.B. `BACKUP_MAIL_TO`
+   leer, Mailserver nicht erreichbar, Anhang größer als
+   `BACKUP_MAIL_MAX_MB`), bricht das Deployment ab, beendet den
+   Wartungsmodus und die App läuft unverändert weiter. Die Mail wird noch mit
+   dem bisherigen Code verschickt und liest die aktuelle `.env` (nicht die
+   gecachte Konfiguration). Bei einer Neuinstallation ohne Datenbank entfällt
+   der Schritt. Einmalig überspringen mit `--no-mail-backup`, dauerhaft
+   abschalten mit `MAIL_BACKUP_BEFORE_DEPLOY="0"` in `recordloom.conf`,
+3. setzt es den Code auf den Stand von `origin/<APP_BRANCH>`. Lokale Änderungen
    am Code werden vorher als Patch nach `/var/backups/recordloom/`
    gesichert und dann verworfen; `.env`, Datenbank und Cover bleiben erhalten,
-3. führt es `composer install --no-dev` und `npm run build` aus; `npm ci`
+4. führt es `composer install --no-dev` und `npm run build` aus; `npm ci`
    läuft nur, wenn sich `package-lock.json` oder Node.js geändert hat,
-4. sichert es die SQLite-Datenbank nach `/var/backups/recordloom/`,
-5. führt es `php artisan migrate --force` aus,
-6. baut es die Laravel-Caches neu (`php artisan optimize`), schreibt den
+5. sichert es die SQLite-Datenbank nach `/var/backups/recordloom/`,
+6. führt es `php artisan migrate --force` aus,
+7. baut es die Laravel-Caches neu (`php artisan optimize`), schreibt den
    Cronjob für den Scheduler und lädt PHP-FPM neu,
-7. beendet es den Wartungsmodus (auch wenn ein Schritt fehlschlägt) und
+8. beendet es den Wartungsmodus (auch wenn ein Schritt fehlschlägt) und
    prüft `https://localhost/up`.
 
 Alle Befehle an der App laufen als `www-data`, dem Besitzer der App-Dateien.
@@ -314,7 +327,7 @@ verpasste Läufe nach (z.B. wenn der Container aus war). Gesteuert wird das übe
 
 | Variable                       | Wert vom Deploy | Bedeutung                                                     |
 | ------------------------------ | --------------- | ------------------------------------------------------------- |
-| `BACKUP_MAIL_TO`               | *(leer)*        | Empfänger des Mail-Backups – ohne Wert kein Backup            |
+| `BACKUP_MAIL_TO`               | *(leer)*        | Empfänger des Mail-Backups – ohne Wert kein Backup (und kein Update, solange `MAIL_BACKUP_BEFORE_DEPLOY=1`) |
 | `BACKUP_INTERVAL_DAYS`         | `1`             | Abstand der Mail-Backups in Tagen (nur wenn sich etwas geändert hat) |
 | `DISCOGS_TOKEN`                | *(leer)*        | Persönlicher Token von discogs.com → Settings → Developers    |
 | `DISCOGS_NIGHTLY_PRICES`       | `false`         | `true` = Discogs-Preise automatisch abgleichen                |
@@ -441,6 +454,7 @@ Repository (`curl … | bash`) über HTTPS.
 | „Es läuft bereits ein Deployment.“        | Ein anderer Lauf von `recordloom-deploy` ist noch aktiv; abwarten |
 | Installer bricht ab                       | Meldung im Terminal bzw. in `/var/log/recordloom-install.log`; der Installer kann einfach erneut gestartet werden |
 | Deploy bricht ab                          | Die Ausgabe steht auch in `/var/log/recordloom-deploy.log`. Der Wartungsmodus wird trotzdem beendet. Fehler beheben und `sudo recordloom-deploy` erneut ausführen, bis es durchläuft – vorher können Code und Datenbank auf unterschiedlichem Stand sein |
+| „Das Mail-Backup ist fehlgeschlagen“     | Es wurde nichts geändert. `BACKUP_MAIL_TO` und `MAIL_*` in der `.env` prüfen, testen mit `cd /var/www/recordLoom && sudo -u www-data php artisan backup:mail --force`; notfalls `sudo recordloom-deploy --no-mail-backup` |
 | Fehlerseite / HTTP 500                    | `sudo tail -n 50 /var/www/recordLoom/storage/logs/laravel-$(date +%F).log` |
 | `.env` geändert, aber keine Wirkung       | `sudo recordloom-deploy` (erkennt die Änderung) oder schneller `cd /var/www/recordLoom && sudo -u www-data php artisan optimize` |
 | „Bereits aktuell“, es soll aber neu gebaut werden | `sudo recordloom-deploy --force`               |
