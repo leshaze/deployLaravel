@@ -56,7 +56,9 @@ cat /etc/recordloom/deploy_key.pub
 Die ausgegebene Zeile bei GitHub eintragen: recordLoom → *Settings → Deploy
 keys → Add deploy key*, **ohne** „Allow write access“. Ein Deploy-Key gilt
 nur für dieses eine Repository und kann nur lesen. Der Schlüssel darf keine
-Passphrase haben, weil das Deploy-Skript ohne Rückfragen läuft.
+Passphrase haben, weil das Deploy-Skript ohne Rückfragen läuft. Die
+ausführliche Anleitung mit Test und häufigen Fehlern steht unter
+[SSH-Schlüssel](#ssh-schlüssel-für-das-private-repository).
 
 Gibt es auf dem System schon einen passenden Schlüssel (z.B.
 `/root/.ssh/id_ed25519`, der bei GitHub hinterlegt ist), kann dieser Schritt
@@ -247,6 +249,95 @@ gelöscht wurde), deployt das Skript mit einer Warnung `main` und setzt
 
 ### SSH-Schlüssel für das private Repository
 
+recordLoom ist ein privates Repository. Der Server braucht deshalb einen
+SSH-Schlüssel, der bei GitHub als **Deploy-Key** von recordLoom eingetragen
+ist. Ein Deploy-Key gilt nur für dieses eine Repository und kann (ohne
+„Allow write access“) nur lesen. Geht der Server verloren, wird nur dieser
+Schlüssel bei GitHub gelöscht, das eigene GitHub-Konto bleibt unberührt.
+
+#### 1. Schlüssel auf dem Server erzeugen
+
+Als root auf dem Server bzw. im Container:
+
+```bash
+apt install -y openssh-client        # falls ssh-keygen fehlt
+mkdir -p /etc/recordloom
+ssh-keygen -t ed25519 -N "" -C "recordloom-deploy@$(hostname)" -f /etc/recordloom/deploy_key
+chmod 600 /etc/recordloom/deploy_key
+```
+
+- `-N ""` = **keine Passphrase**. Das ist nötig, weil `recordloom-deploy`
+  ohne Rückfragen läuft; ein Schlüssel mit Passphrase wird abgelehnt.
+- `-C` ist nur ein Kommentar, an dem man den Schlüssel bei GitHub
+  wiedererkennt.
+- Es entstehen zwei Dateien: `/etc/recordloom/deploy_key` (privat, bleibt
+  auf dem Server, nie weitergeben) und `/etc/recordloom/deploy_key.pub`
+  (öffentlich, kommt zu GitHub).
+
+Gibt es `/etc/recordloom/deploy_key` schon, fragt `ssh-keygen`, ob er
+überschrieben werden soll. Mit `n` abbrechen, wenn der vorhandene Schlüssel
+bereits bei GitHub eingetragen ist.
+
+#### 2. Öffentlichen Schlüssel anzeigen
+
+```bash
+cat /etc/recordloom/deploy_key.pub
+```
+
+Die Ausgabe ist **eine** Zeile, etwa
+`ssh-ed25519 AAAAC3Nza… recordloom-deploy@recordloom`. Die ganze Zeile
+kopieren (in der Proxmox-Konsole markieren und mit Strg+C bzw. per
+Rechtsklick kopieren; einfacher geht es über eine SSH-Verbindung vom eigenen
+Rechner).
+
+#### 3. Bei GitHub als Deploy-Key eintragen
+
+1. Auf github.com das Repository **leshaze/recordLoom** öffnen (dafür sind
+   Admin-Rechte am Repository nötig).
+2. **Settings** → in der linken Spalte **Deploy keys** → **Add deploy key**.
+3. **Title**: frei wählbar, z.B. `recordloom-container` oder der Hostname.
+4. **Key**: die kopierte Zeile aus Schritt 2 einfügen.
+5. **Allow write access** **nicht** anhaken – der Server muss nur lesen.
+6. **Add key** klicken (GitHub fragt eventuell noch einmal nach dem
+   Passwort bzw. der Zwei-Faktor-Bestätigung).
+
+Direkter Link: `https://github.com/leshaze/recordLoom/settings/keys`.
+
+#### 4. Zugriff testen
+
+```bash
+ssh -i /etc/recordloom/deploy_key -o IdentitiesOnly=yes -T git@github.com
+```
+
+Beim ersten Mal fragt SSH, ob der Host-Schlüssel von GitHub vertraut werden
+soll: `yes` eingeben. GitHub antwortet mit „Hi leshaze/recordLoom! You've
+successfully authenticated, but GitHub does not provide shell access.“ – das
+ist der Erfolg (der Exit-Code 1 ist normal). Danach das Deployment starten
+bzw. die Installation abschließen:
+
+```bash
+recordloom-deploy
+```
+
+#### Häufige Fehler
+
+| Meldung | Ursache und Lösung |
+| ------- | ------------------ |
+| `Permission denied (publickey)` | Schlüssel nicht (oder bei einem anderen Repository) eingetragen, oder beim Kopieren abgeschnitten. Schritt 2 und 3 wiederholen |
+| `Key is already in use` (bei GitHub) | Ein Deploy-Key darf bei GitHub nur einmal vorkommen. Für jeden Server einen eigenen Schlüssel erzeugen oder den alten Eintrag löschen |
+| „… ist mit einer Passphrase geschützt“ (von `recordloom-deploy`) | Schlüssel neu erzeugen, diesmal mit `-N ""` |
+| `ERROR: Repository not found.` | Der Schlüssel gehört zu einem anderen Repository, oder `APP_REPO` in `recordloom.conf` ist falsch |
+
+#### Schlüssel austauschen
+
+Neuen Schlüssel wie in Schritt 1 erzeugen (vorhandenen überschreiben), bei
+GitHub unter *Deploy keys* den neuen eintragen und den alten **Delete**-en.
+Ein gelöschter Deploy-Key funktioniert sofort nicht mehr – sinnvoll, wenn ein
+Server ausgemustert wird oder der Schlüssel in falsche Hände geraten sein
+könnte.
+
+#### Wo das Skript den Schlüssel sucht
+
 Git läuft als `www-data`, der Schlüssel von root ist für diesen Benutzer
 nicht lesbar. `recordloom-deploy` kopiert ihn deshalb für die Dauer des
 Deployments nach `/run/recordloom-ssh.*` (mit eigener SSH-Konfiguration und
@@ -269,14 +360,7 @@ eintragen:
 APP_SSH_KEY="/home/pi/.ssh/id_ed25519"
 ```
 
-Zugriff testen:
-
-```bash
-ssh -i /etc/recordloom/deploy_key -T git@github.com
-```
-
-GitHub antwortet mit „Hi leshaze/recordLoom! You've successfully
-authenticated …“. Ältere Installationen mit der früheren HTTPS-Adresse
+Ältere Installationen mit der früheren HTTPS-Adresse
 stellt `recordloom-deploy` automatisch auf SSH um.
 
 ### Konfiguration der App (`.env`)
