@@ -6,6 +6,7 @@
 #
 #   sudo recordloom-deploy            # nur wenn sich etwas geändert hat
 #   sudo recordloom-deploy --force    # immer neu bauen
+#   sudo recordloom-deploy --no-mail-backup   # ohne Mail-Backup vorab
 #
 # Einstellungen stehen in /etc/recordloom/recordloom.conf und können per
 # Umgebungsvariable überschrieben werden.
@@ -23,13 +24,15 @@ main() {
     set -Eeuo pipefail
     exec </dev/null
 
-    local force=0 arg
+    local force=0 skip_mail_backup=0 arg
     for arg in "$@"; do
         case "$arg" in
             -f | --force) force=1 ;;
+            --no-mail-backup) skip_mail_backup=1 ;;
             -h | --help)
-                echo "Aufruf: recordloom-deploy [--force]"
-                echo "  --force  auch dann neu bauen, wenn sich nichts geändert hat"
+                echo "Aufruf: recordloom-deploy [--force] [--no-mail-backup]"
+                echo "  --force           auch dann neu bauen, wenn sich nichts geändert hat"
+                echo "  --no-mail-backup  die Datenbank vor dem Update nicht per Mail verschicken"
                 exit 0
                 ;;
             *)
@@ -61,6 +64,9 @@ main() {
     NODE_MIN="${NODE_MIN:-24}"
     SEED_DEMO_DATA="${SEED_DEMO_DATA:-0}"
     KEEP_BACKUPS="${KEEP_BACKUPS:-14}"
+    # 1 = vor jedem Update die Datenbank per Mail verschicken (backup:mail von
+    # recordLoom); das Update läuft nur weiter, wenn die Mail raus ist.
+    MAIL_BACKUP_BEFORE_DEPLOY="${MAIL_BACKUP_BEFORE_DEPLOY:-1}"
     APP_USER="${APP_USER:-www-data}"
     APP_HOME=/var/lib/recordloom
     BACKUP_DIR=/var/backups/recordloom
@@ -170,6 +176,13 @@ main() {
             else
                 warn "artisan down fehlgeschlagen"
             fi
+        fi
+        # Noch mit dem alten Code und vor jeder Änderung: Schlägt der Versand
+        # fehl, bricht das Deployment ab und die App läuft unverändert weiter.
+        if [ "$skip_mail_backup" = "1" ]; then
+            warn "Mail-Backup vor dem Update übersprungen (--no-mail-backup)"
+        elif [ "$MAIL_BACKUP_BEFORE_DEPLOY" = "1" ]; then
+            mail_backup
         fi
         # Lokale Änderungen am Code würden den Checkout blockieren. Sie werden
         # gesichert und verworfen, damit exakt der Stand aus Git läuft.
@@ -311,6 +324,13 @@ EOF
         MAINTENANCE=0
     fi
 
+    local mail_problem
+    if [ "$MAIL_BACKUP_BEFORE_DEPLOY" = "1" ] && mail_problem="$(mail_backup_problem)"; then
+        warn "$mail_problem."
+        warn "Vor jedem Update wird die Datenbank per Mail verschickt - bis das eingerichtet ist,"
+        warn "bricht das nächste Update ab (siehe README: Mail-Backup einrichten)."
+    fi
+
     trap - ERR
     if command -v curl >/dev/null && systemctl is-active --quiet nginx 2>/dev/null; then
         # PHP-FPM braucht nach dem Neuladen einen Moment.
@@ -346,7 +366,7 @@ load_conf() {
         value="${BASH_REMATCH[2]}"
         case "$key" in
             APP_NAME | APP_REPO | APP_SSH_KEY | APP_BRANCH | APP_DIR | APP_URL | APP_TIMEZONE | \
-                PHP_VERSION | NODE_MIN | SEED_DEMO_DATA | KEEP_BACKUPS)
+                PHP_VERSION | NODE_MIN | SEED_DEMO_DATA | KEEP_BACKUPS | MAIL_BACKUP_BEFORE_DEPLOY)
                 if [ -z "${!key+set}" ]; then
                     printf -v "$key" '%s' "$value"
                 fi
@@ -378,6 +398,7 @@ validate_settings() {
     [[ "$NODE_MIN" =~ ^[0-9]+(\.[0-9]+)*$ ]] || bad="NODE_MIN ($NODE_MIN)"
     [[ "$SEED_DEMO_DATA" =~ ^[01]$ ]] || bad="SEED_DEMO_DATA ($SEED_DEMO_DATA)"
     [[ "$KEEP_BACKUPS" =~ ^[0-9]{1,4}$ ]] || bad="KEEP_BACKUPS ($KEEP_BACKUPS)"
+    [[ "$MAIL_BACKUP_BEFORE_DEPLOY" =~ ^[01]$ ]] || bad="MAIL_BACKUP_BEFORE_DEPLOY ($MAIL_BACKUP_BEFORE_DEPLOY)"
     [[ "$APP_USER" =~ ^[a-z_][a-z0-9_-]*$ && "$APP_USER" != root ]] && id "$APP_USER" >/dev/null 2>&1 ||
         bad="APP_USER ($APP_USER)"
     if [ -n "$bad" ]; then
@@ -467,6 +488,63 @@ deploy_signature() {
     echo "settings=$APP_BRANCH $APP_REPO $APP_URL $APP_TIMEZONE"
     echo "env=$(as_app sha256sum .env 2>/dev/null | cut -d' ' -f1)"
     echo "php=$("$PHP_BIN" -r 'echo PHP_VERSION;') node=$(node -v)"
+}
+
+# Aktuelle Datenbank per Mail verschicken, genau wie der Cronjob von recordLoom
+# (php artisan backup:mail), aber immer, auch ohne Änderung seit dem letzten
+# Backup. Bricht das Deployment ab, wenn die Mail nicht verschickt wurde.
+mail_backup() {
+    if [ ! -s database/database.sqlite ]; then
+        info "Noch keine Datenbank - Mail-Backup entfällt"
+        return 0
+    fi
+    step "Datenbank per Mail sichern"
+    if [ ! -f vendor/autoload.php ] || [ ! -f .env ]; then
+        error "Die bisherige Installation ist unvollständig (vendor/ oder .env fehlt), das Mail-Backup ist nicht möglich."
+        error "Ohne Mail-Backup aktualisieren:  recordloom-deploy --no-mail-backup"
+        exit 1
+    fi
+    local problem
+    if problem="$(mail_backup_problem)"; then
+        error "Mail-Backup nicht möglich: $problem - es wurde nichts geändert."
+        error "Einrichten siehe README (Mail-Backup einrichten), danach erneut: recordloom-deploy"
+        error "Ohne Mail-Backup aktualisieren:  recordloom-deploy --no-mail-backup"
+        error "Dauerhaft abschalten:  MAIL_BACKUP_BEFORE_DEPLOY=\"0\" in $CONF_FILE"
+        exit 1
+    fi
+    # Mit der aktuellen .env statt der gecachten Konfiguration, damit gerade
+    # geänderte MAIL_- bzw. BACKUP_-Einstellungen schon gelten. Die Datei
+    # existiert nicht: Laravel liest die Konfiguration dann neu ein.
+    if ! as_app timeout 300 env APP_CONFIG_CACHE="$APP_HOME/no-config-cache.php" \
+        "$PHP_BIN" artisan backup:mail --force --no-interaction; then
+        error "Das Mail-Backup ist fehlgeschlagen (Ausgabe siehe oben) - es wurde nichts geändert."
+        error "Prüfen: BACKUP_MAIL_TO und MAIL_* in $APP_DIR/.env, Test mit"
+        error "  cd $APP_DIR && sudo -u $APP_USER $PHP_BIN artisan backup:mail --force"
+        error "Ohne Mail-Backup aktualisieren:  recordloom-deploy --no-mail-backup"
+        error "Dauerhaft abschalten:  MAIL_BACKUP_BEFORE_DEPLOY=\"0\" in $CONF_FILE"
+        exit 1
+    fi
+}
+
+# Gibt aus, warum das Mail-Backup laut .env nicht funktionieren kann (Exit 0),
+# oder nichts (Exit 1). Mit MAIL_MAILER=log/array meldet backup:mail Erfolg,
+# ohne dass eine Mail das System verlässt - das darf nicht als Backup gelten.
+mail_backup_problem() {
+    local to mailer
+    to="$(env_get BACKUP_MAIL_TO)"
+    mailer="$(env_get MAIL_MAILER)"
+    if [ -z "$to" ] || [ "$to" = null ]; then
+        echo "BACKUP_MAIL_TO ist in $APP_DIR/.env nicht gesetzt"
+    elif [ -z "$mailer" ] || [ "$mailer" = log ] || [ "$mailer" = array ]; then
+        echo "MAIL_MAILER=${mailer:-log} in $APP_DIR/.env verschickt keine Mails (z.B. smtp mit MAIL_HOST usw. eintragen)"
+    else
+        return 1
+    fi
+}
+
+# env_get KEY: Wert aus der .env (ohne Anführungszeichen), leer wenn er fehlt
+env_get() {
+    as_app sed -n "s/^$1=[\"']\{0,1\}\([^\"']*\)[\"']\{0,1\}[[:space:]]*\$/\1/p" .env 2>/dev/null | tail -n1
 }
 
 # prune_backups MUSTER: nur die neuesten KEEP_BACKUPS Dateien behalten
