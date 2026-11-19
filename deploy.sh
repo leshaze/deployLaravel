@@ -324,6 +324,13 @@ EOF
         MAINTENANCE=0
     fi
 
+    local mail_problem
+    if [ "$MAIL_BACKUP_BEFORE_DEPLOY" = "1" ] && mail_problem="$(mail_backup_problem)"; then
+        warn "$mail_problem."
+        warn "Vor jedem Update wird die Datenbank per Mail verschickt - bis das eingerichtet ist,"
+        warn "bricht das nächste Update ab (siehe README: Mail-Backup einrichten)."
+    fi
+
     trap - ERR
     if command -v curl >/dev/null && systemctl is-active --quiet nginx 2>/dev/null; then
         # PHP-FPM braucht nach dem Neuladen einen Moment.
@@ -497,6 +504,14 @@ mail_backup() {
         error "Ohne Mail-Backup aktualisieren:  recordloom-deploy --no-mail-backup"
         exit 1
     fi
+    local problem
+    if problem="$(mail_backup_problem)"; then
+        error "Mail-Backup nicht möglich: $problem - es wurde nichts geändert."
+        error "Einrichten siehe README (Mail-Backup einrichten), danach erneut: recordloom-deploy"
+        error "Ohne Mail-Backup aktualisieren:  recordloom-deploy --no-mail-backup"
+        error "Dauerhaft abschalten:  MAIL_BACKUP_BEFORE_DEPLOY=\"0\" in $CONF_FILE"
+        exit 1
+    fi
     # Mit der aktuellen .env statt der gecachten Konfiguration, damit gerade
     # geänderte MAIL_- bzw. BACKUP_-Einstellungen schon gelten. Die Datei
     # existiert nicht: Laravel liest die Konfiguration dann neu ein.
@@ -509,6 +524,27 @@ mail_backup() {
         error "Dauerhaft abschalten:  MAIL_BACKUP_BEFORE_DEPLOY=\"0\" in $CONF_FILE"
         exit 1
     fi
+}
+
+# Gibt aus, warum das Mail-Backup laut .env nicht funktionieren kann (Exit 0),
+# oder nichts (Exit 1). Mit MAIL_MAILER=log/array meldet backup:mail Erfolg,
+# ohne dass eine Mail das System verlässt - das darf nicht als Backup gelten.
+mail_backup_problem() {
+    local to mailer
+    to="$(env_get BACKUP_MAIL_TO)"
+    mailer="$(env_get MAIL_MAILER)"
+    if [ -z "$to" ] || [ "$to" = null ]; then
+        echo "BACKUP_MAIL_TO ist in $APP_DIR/.env nicht gesetzt"
+    elif [ -z "$mailer" ] || [ "$mailer" = log ] || [ "$mailer" = array ]; then
+        echo "MAIL_MAILER=${mailer:-log} in $APP_DIR/.env verschickt keine Mails (z.B. smtp mit MAIL_HOST usw. eintragen)"
+    else
+        return 1
+    fi
+}
+
+# env_get KEY: Wert aus der .env (ohne Anführungszeichen), leer wenn er fehlt
+env_get() {
+    as_app sed -n "s/^$1=[\"']\{0,1\}\([^\"']*\)[\"']\{0,1\}[[:space:]]*\$/\1/p" .env 2>/dev/null | tail -n1
 }
 
 # prune_backups MUSTER: nur die neuesten KEEP_BACKUPS Dateien behalten

@@ -98,6 +98,38 @@ Der Installer kann jederzeit erneut ausgeführt werden. Er bringt das System
 auf den aktuellen Stand und überschreibt weder Daten noch `.env`,
 Zertifikat oder die Einstellungen in `/etc/recordloom/recordloom.conf`.
 
+**3. Mail-Backup einrichten.** Vor jedem Update verschickt
+`recordloom-deploy` die Datenbank per Mail und bricht ab, wenn das nicht
+klappt (siehe [Updates](#updates)). Die frische `.env` hat dafür noch keine
+Werte (`BACKUP_MAIL_TO` ist leer, `MAIL_MAILER=log` schreibt Mails nur ins
+Log), das nächste Update würde deshalb abbrechen. Darum direkt nach der
+Installation in `/var/www/recordLoom/.env` eintragen:
+
+```dotenv
+BACKUP_MAIL_TO=du@example.com
+MAIL_MAILER=smtp
+MAIL_HOST=smtp.example.com
+MAIL_PORT=587
+MAIL_USERNAME=du@example.com
+MAIL_PASSWORD="geheim"
+MAIL_ENCRYPTION=tls
+MAIL_FROM_ADDRESS=du@example.com
+```
+
+und testen:
+
+```bash
+cd /var/www/recordLoom
+sudo -u www-data php artisan optimize               # neue .env übernehmen
+sudo -u www-data php artisan backup:mail --force    # Mail muss ankommen
+```
+
+Dieselben Werte nutzt auch das tägliche Mail-Backup des
+[Schedulers](#scheduler-mail-backup-discogs-preise). Wer kein Mail-Backup vor
+Updates möchte, setzt `MAIL_BACKUP_BEFORE_DEPLOY="0"` in
+`/etc/recordloom/recordloom.conf`. Solange es nicht eingerichtet ist, warnt
+`recordloom-deploy` am Ende jedes Laufs.
+
 Alle Befehle in dieser Anleitung laufen als root. Der Installer richtet
 auch `sudo` ein; als root kann es vor den Befehlen entfallen.
 
@@ -257,6 +289,11 @@ Bei einer Neuinstallation erzeugt `recordloom-deploy` sie aus
 späteren Läufen ergänzt es nur fehlende Werte, eigene Änderungen bleiben
 erhalten.
 
+Mail-Server und Empfänger des Mail-Backups kann das Skript nicht kennen:
+`BACKUP_MAIL_TO` bleibt leer und `MAIL_MAILER=log` aus `.env.example`. Beides
+muss von Hand eingetragen werden, sonst bricht jedes Update ab (siehe
+[Installation, Schritt 3](#installation)).
+
 Nach jeder Änderung an der `.env` den Konfigurations-Cache neu aufbauen,
 sonst bleibt die alte Konfiguration aktiv:
 
@@ -282,7 +319,8 @@ Deploy-Skript, PHP- und Node.js-Version), endet es nach wenigen Sekunden mit
    Mail-Backup des Schedulers (`php artisan backup:mail --force`, also auch
    ohne Änderung seit dem letzten Backup). **Nur wenn die Mail verschickt
    wurde, geht es weiter.** Schlägt der Versand fehl (z.B. `BACKUP_MAIL_TO`
-   leer, Mailserver nicht erreichbar, Anhang größer als
+   leer, `MAIL_MAILER=log` bzw. `array`, Mailserver nicht erreichbar,
+   Anhang größer als
    `BACKUP_MAIL_MAX_MB`), bricht das Deployment ab, beendet den
    Wartungsmodus und die App läuft unverändert weiter. Die Mail wird noch mit
    dem bisherigen Code verschickt und liest die aktuelle `.env` (nicht die
@@ -335,7 +373,16 @@ verpasste Läufe nach (z.B. wenn der Container aus war). Gesteuert wird das übe
 
 Für das Mail-Backup braucht es außerdem eine funktionierende
 Mail-Konfiguration: `MAIL_MAILER`, `MAIL_HOST`, `MAIL_PORT`,
-`MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM_ADDRESS`.
+`MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM_ADDRESS` (Beispiel unter
+[Installation, Schritt 3](#installation)).
+
+Scheduler und Deploy-Skript verwenden denselben Befehl `backup:mail`: der
+Scheduler mit `--if-due` (höchstens einmal pro `BACKUP_INTERVAL_DAYS` und nur
+bei geänderten Daten), das Deploy-Skript mit `--force` (vor jedem Update,
+auch ohne Änderung). Beide merken sich den gesendeten Stand, nach einem
+Update schickt der Scheduler also keine zweite Mail mit denselben Daten.
+`BACKUP_MAIL_ENABLED=false` schaltet nur den Scheduler ab; das Mail-Backup
+vor Updates steuert `MAIL_BACKUP_BEFORE_DEPLOY` in `recordloom.conf`.
 
 ### Scheduler prüfen
 
