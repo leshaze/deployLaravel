@@ -459,7 +459,9 @@ sudo curl -fsSLo /usr/local/sbin/recordloom-deploy https://raw.githubusercontent
 
 ## Scheduler (Mail-Backup, Discogs-Preise)
 
-`recordloom-deploy` schreibt `/etc/cron.d/recordloom`. Der Cronjob startet
+`recordloom-deploy` schreibt `/etc/cron.d/recordloom` und prüft bei jedem
+Lauf – auch wenn es sonst „Bereits aktuell“ ist –, ob die Datei stimmt und
+cron läuft. Am Ende eines Updates zeigt es die geplanten Aufgaben an. Der Cronjob startet
 jede Minute den Laravel-Scheduler als `www-data`:
 
 ```
@@ -477,6 +479,17 @@ verpasste Läufe nach (z.B. wenn der Container aus war). Gesteuert wird das übe
 | `DISCOGS_TOKEN`                | *(leer)*        | Persönlicher Token von discogs.com → Settings → Developers    |
 | `DISCOGS_NIGHTLY_PRICES`       | `false`         | `true` = Discogs-Preise automatisch abgleichen                |
 | `DISCOGS_PRICE_INTERVAL_HOURS` | `24`            | Abstand des Discogs-Preisabgleichs in Stunden                 |
+| `QUEUE_CONNECTION`             | `database`      | Warteschlange für Benachrichtigungs-Mails, siehe unten        |
+
+**Warteschlange (`queue:work`):** recordLoom verschickt Benachrichtigungs-Mails
+nicht sofort beim Klick, sondern legt sie in eine Warteschlange in der
+Datenbank. Der Scheduler startet jede Minute `queue:work --stop-when-empty`:
+Der arbeitet die wartenden Mails ab und beendet sich, sobald die Schlange
+leer ist (spätestens nach 4 Minuten). Ein dauerhaft laufender Worker ist so
+nicht nötig. Mit `QUEUE_CONNECTION=sync` werden Mails direkt beim Klick
+verschickt; die Aufgabe wird dann übersprungen. Ältere Installationen haben
+noch `sync` in der `.env` – beides funktioniert, `database` hält die Seite
+aber schnell, auch wenn der Mailserver langsam ist.
 
 Für das Mail-Backup braucht es außerdem eine funktionierende
 Mail-Konfiguration: `MAIL_MAILER`, `MAIL_HOST`, `MAIL_PORT`,
@@ -507,8 +520,17 @@ sudo cat storage/app/private/schedule/last-runs.json   # letzte Läufe
 `schedule:list` zeigt nur die Aufgaben, die aktiviert sind:
 `backup:mail --if-due` nur mit gesetztem `BACKUP_MAIL_TO`,
 `discogs:update-prices --if-due` nur mit `DISCOGS_TOKEN` und
-`DISCOGS_NIGHTLY_PRICES=true`. Fehlt eine Aufgabe trotz richtiger `.env`,
-wurde nach der Änderung `php artisan optimize` vergessen.
+`DISCOGS_NIGHTLY_PRICES=true`, `queue:work` nur ohne `QUEUE_CONNECTION=sync`.
+Fehlt eine Aufgabe trotz richtiger `.env`, wurde nach der Änderung
+`php artisan optimize` (bzw. `sudo recordloom-deploy`) vergessen.
+
+Läuft eine Aufgabe trotz Eintrag nicht, kann eine Sperre von einem
+abgebrochenen Lauf übrig sein (z.B. nach einem Stromausfall).
+`withoutOverlapping` hält sie bis zu 24 Stunden. Freigeben mit:
+
+```bash
+sudo -u www-data php artisan schedule:clear-cache
+```
 
 Die Aufgaben lassen sich auch direkt starten:
 
