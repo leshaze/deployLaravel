@@ -111,7 +111,7 @@ main() {
     step "System aktualisieren"
     apt_get update
     apt_get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold full-upgrade
-    apt_get install ca-certificates curl git openssh-client unzip openssl sqlite3 lsb-release cron sudo
+    apt_install ca-certificates curl git openssh-client unzip openssl sqlite3 cron sudo
     systemctl enable --now cron
     if [ "$ENABLE_MDNS" = "1" ]; then
         setup_mdns
@@ -157,7 +157,7 @@ main() {
         if [ -d /etc/NetworkManager/conf.d ]; then
             printf '[connection]\nwifi.powersave = 2\n' >/etc/NetworkManager/conf.d/99-recordloom-wifi-powersave.conf
         fi
-        apt_get install iw
+        apt_install iw
         iw dev wlan0 set power_save off || true
     fi
 
@@ -175,18 +175,21 @@ main() {
         info "php${PHP_VERSION} nicht in der Distribution - Sury-Repository wird eingerichtet"
         curl -fsSLo "$TMP_DIR/debsuryorg-archive-keyring.deb" https://packages.sury.org/debsuryorg-archive-keyring.deb
         dpkg -i "$TMP_DIR/debsuryorg-archive-keyring.deb"
-        echo "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" \
+        echo "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ ${VERSION_CODENAME} main" \
             >/etc/apt/sources.list.d/php-sury.list
         apt_get update
     fi
     info "Verwende PHP $PHP_VERSION"
-    local php_pkgs=(fpm cli common sqlite3 mbstring xml curl zip gd bcmath intl)
+    # Was recordLoom braucht: sqlite3 (Datenbank), mbstring/xml (Laravel,
+    # dompdf), gd (Cover, PDF-Bilder), curl (Discogs), intl (Zahlen- und
+    # Datumsformate von Laravel). Zip-Archive entpackt Composer mit unzip.
+    local php_pkgs=(fpm cli common sqlite3 mbstring xml curl gd intl)
     php_pkgs=("${php_pkgs[@]/#/php${PHP_VERSION}-}")
     # Ab PHP 8.5 ist OPcache fest eingebaut und kein eigenes Paket mehr.
     if apt-cache show "php${PHP_VERSION}-opcache" >/dev/null 2>&1; then
         php_pkgs+=("php${PHP_VERSION}-opcache")
     fi
-    apt_get install "${php_pkgs[@]}"
+    apt_install "${php_pkgs[@]}"
     update-alternatives --set php "/usr/bin/php${PHP_VERSION}" >/dev/null 2>&1 || true
 
     cat >"/etc/php/${PHP_VERSION}/fpm/conf.d/99-recordloom.ini" <<'EOF'
@@ -235,7 +238,7 @@ EOF
                 exit 1
                 ;;
         esac
-        apt_get install gnupg
+        apt_install gpg
         install -d -m 755 /etc/apt/keyrings
         curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key |
             gpg --dearmor --yes -o /etc/apt/keyrings/nodesource.gpg
@@ -245,10 +248,10 @@ EOF
         # Das nodejs-Paket von NodeSource bringt npm mit und kollidiert mit
         # dem npm-Paket der Distribution.
         apt_get purge npm || true
-        apt_get install nodejs
+        apt_install nodejs
         apt_get autoremove --purge
     else
-        apt_get install nodejs npm
+        apt_install nodejs npm
     fi
     if ! dpkg --compare-versions "$(node -p 'process.versions.node')" ge "$NODE_MIN"; then
         error "Node.js $(node -v) ist zu alt (benötigt wird >= $NODE_MIN)"
@@ -258,7 +261,7 @@ EOF
 
     # ------------------------------------------------------------------ nginx
     step "nginx mit HTTPS (selbst signiertes Zertifikat) einrichten"
-    apt_get install nginx
+    apt_install nginx
     local host first_ip ip
     host="$(hostname)"
     first_ip=""
@@ -423,7 +426,7 @@ EOF
 
     if [ "$ENABLE_FIREWALL" = "1" ]; then
         step "Firewall (ufw) einrichten"
-        apt_get install ufw
+        apt_install ufw
         ufw allow OpenSSH >/dev/null || ufw allow 22/tcp >/dev/null
         ufw allow 80/tcp >/dev/null
         ufw allow 443/tcp >/dev/null
@@ -437,7 +440,8 @@ EOF
 
     if [ "$ENABLE_FAIL2BAN" = "1" ]; then
         step "fail2ban einrichten"
-        apt_get install fail2ban python3-systemd
+        # nftables: Debian sperrt Angreifer per nftables (banaction).
+        apt_install fail2ban python3-systemd nftables
         # Seit Bookworm gibt es kein /var/log/auth.log mehr -> journald nutzen.
         cat >/etc/fail2ban/jail.d/recordloom.local <<'EOF'
 [sshd]
@@ -595,7 +599,7 @@ setup_mdns() {
             printf '#!/bin/sh\nexit 101\n' >/usr/sbin/policy-rc.d
             chmod 755 /usr/sbin/policy-rc.d
         fi
-        apt_get install avahi-daemon || true
+        apt_install avahi-daemon || true
         if [ "$own_policy" = "1" ]; then
             rm -f /usr/sbin/policy-rc.d
         fi
@@ -614,6 +618,14 @@ setup_mdns() {
 
 apt_get() {
     apt-get -y -q -o DPkg::Lock::Timeout=600 "$@"
+}
+
+# Pakete ohne "Empfehlungen" installieren: Die bringen sonst z.B. xauth und
+# X11-Bibliotheken (über openssh-client), Perl- und Desktop-Hilfsprogramme
+# (über npm) oder Übersetzungen mit, die ein Server nicht braucht. Was davon
+# wirklich nötig ist, steht ausdrücklich in der Paketliste.
+apt_install() {
+    apt_get install --no-install-recommends "$@"
 }
 step() { echo -e "\n\e[96m==> $*\e[0m"; }
 info() { echo -e "\e[90m    $*\e[0m"; }

@@ -149,6 +149,29 @@ auch `sudo` ein; als root kann es vor den Befehlen entfallen.
    installieren und die App deployen (ohne SSH-Schlüssel vorher einen
    Deploy-Key erzeugen, siehe oben)
 
+Der Installer installiert nur die Pakete, die recordLoom braucht, und zwar
+ohne die von apt „empfohlenen“ Zusatzpakete (`--no-install-recommends`).
+Die würden sonst z.B. `xauth` mit X11-Bibliotheken, Perl- und
+Desktop-Hilfsprogramme oder Übersetzungen mitbringen.
+
+| Bereich  | Pakete |
+| -------- | ------ |
+| Basis    | `ca-certificates curl git openssh-client unzip openssl sqlite3 cron sudo` |
+| PHP      | `php8.x-` `fpm cli common sqlite3 mbstring xml curl gd intl` (+ `opcache` bis PHP 8.4) |
+| Node.js  | `nodejs` (NodeSource, mit npm); dafür einmalig `gpg` |
+| Web      | `nginx` |
+| Optional | `avahi-daemon` (mDNS), `ufw`, `fail2ban python3-systemd nftables`, `iw` (nur mit WLAN) |
+
+Kleine X11-Bibliotheken (`libx11-6`, `libxpm4`) kommen trotzdem mit: Sie
+sind eine feste Abhängigkeit von `php-gd`. Eine grafische Oberfläche wird
+nicht installiert.
+
+`apt full-upgrade` aktualisiert alle Pakete, die schon auf dem System sind.
+Auf einem Image **mit Desktop** sind das auch Chromium, Firefox, Kernel und
+Kamera-Bibliotheken – die stammen dann vom Image, nicht vom Installer. Für
+einen Server deshalb Raspberry Pi OS **Lite** bzw. das Debian-Template ohne
+Desktop verwenden.
+
 Im Container erkennt der Installer, dass er nicht auf echter Hardware läuft,
 und lässt alles weg, was dort Sache von Proxmox ist:
 
