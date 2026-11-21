@@ -165,6 +165,9 @@ main() {
             [ "$(cat "$STATE_FILE")" = "$(deploy_signature)" ]; then
             trap - ERR
             info "Stand: $(as_app git log -1 --format='%h %s (%ci)')"
+            # Der Cronjob wird auch ohne Update geprüft und bei Bedarf neu
+            # geschrieben, damit der Scheduler nicht unbemerkt stillsteht.
+            setup_cron
             step "Bereits aktuell - nichts zu tun (neu bauen mit: recordloom-deploy --force)"
             exit 0
         fi
@@ -223,7 +226,9 @@ main() {
     env_value SESSION_DRIVER database "$new_env"
     env_value SESSION_SECURE_COOKIE true "$new_env"
     env_value CACHE_STORE database "$new_env"
-    env_value QUEUE_CONNECTION sync "$new_env"
+    # Mails von Benachrichtigungen warten in der Datenbank-Warteschlange; der
+    # Scheduler von recordLoom arbeitet sie jede Minute ab.
+    env_value QUEUE_CONNECTION database "$new_env"
     env_value FILESYSTEM_DISK local "$new_env"
     env_value BROADCAST_CONNECTION log "$new_env"
     # Intervalle des Schedulers von recordLoom (Mail-Backup, Discogs-Preise)
@@ -301,19 +306,7 @@ main() {
     as_app chmod -R u+rwX,g+rwX,o-rwx storage bootstrap/cache database
     as_app chmod 640 .env
 
-    step "Scheduler-Cronjob einrichten"
-    # Läuft als Webserver-Benutzer, damit Caches und Logs nicht root gehören.
-    if [ -d /etc/cron.d ]; then
-        cat >/etc/cron.d/recordloom <<EOF
-# Generiert von deployLaravel/deploy.sh - Laravel Scheduler von $APP_NAME
-SHELL=/bin/sh
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-* * * * * $APP_USER cd $APP_DIR && $(command -v "$PHP_BIN") artisan schedule:run >> /dev/null 2>&1
-EOF
-        chmod 644 /etc/cron.d/recordloom
-    else
-        warn "/etc/cron.d fehlt (cron nicht installiert) - Scheduler nicht eingerichtet"
-    fi
+    setup_cron
 
     if systemctl list-unit-files "$PHP_FPM_SERVICE.service" >/dev/null 2>&1; then
         systemctl reload "$PHP_FPM_SERVICE" || systemctl restart "$PHP_FPM_SERVICE"
@@ -347,10 +340,53 @@ EOF
             exit 1
         fi
         deploy_signature >"$STATE_FILE"
+        show_schedule
         step "Healthcheck OK - Deployment abgeschlossen"
     else
         deploy_signature >"$STATE_FILE"
+        show_schedule
         step "Deployment abgeschlossen"
+    fi
+}
+
+# Cronjob für den Laravel-Scheduler schreiben (nur wenn er fehlt oder sich
+# geändert hat) und prüfen, ob cron läuft. Läuft als Webserver-Benutzer,
+# damit Caches und Logs nicht root gehören.
+setup_cron() {
+    step "Scheduler-Cronjob prüfen"
+    if [ ! -d /etc/cron.d ]; then
+        warn "/etc/cron.d fehlt (cron nicht installiert) - Scheduler läuft nicht. Installer erneut ausführen."
+        return 0
+    fi
+    local cron_file=/etc/cron.d/recordloom wanted
+    wanted="# Generiert von deployLaravel/deploy.sh - Laravel Scheduler von $APP_NAME
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+* * * * * $APP_USER cd $APP_DIR && $(command -v "$PHP_BIN") artisan schedule:run >> /dev/null 2>&1"
+    if [ "$(cat "$cron_file" 2>/dev/null)" != "$wanted" ]; then
+        printf '%s\n' "$wanted" >"$cron_file"
+        info "$cron_file geschrieben"
+    fi
+    # cron ignoriert Dateien, die nicht root gehören oder für andere
+    # beschreibbar sind.
+    chown root:root "$cron_file"
+    chmod 644 "$cron_file"
+    if command -v systemctl >/dev/null && ! systemctl is-active --quiet cron 2>/dev/null; then
+        warn "Der Dienst cron läuft nicht - wird gestartet"
+        systemctl enable --now cron || warn "cron konnte nicht gestartet werden: systemctl status cron"
+    fi
+}
+
+# Geplante Aufgaben anzeigen, damit sofort auffällt, wenn eine fehlt (z.B.
+# das Mail-Backup ohne BACKUP_MAIL_TO in der .env).
+show_schedule() {
+    local list
+    if list="$(as_app "$PHP_BIN" artisan schedule:list 2>&1)"; then
+        step "Geplante Aufgaben (Scheduler läuft jede Minute per cron)"
+        printf '%s\n' "$list" | sed -e '/^[[:space:]]*$/d' -e 's/^/    /'
+    else
+        warn "artisan schedule:list fehlgeschlagen:"
+        printf '%s\n' "$list" | sed 's/^/      /'
     fi
 }
 
