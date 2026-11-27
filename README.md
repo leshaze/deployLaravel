@@ -408,6 +408,44 @@ sonst bleibt die alte Konfiguration aktiv:
 cd /var/www/recordLoom && sudo -u www-data php artisan optimize
 ```
 
+Fehlt in einer älteren `.env` eine neue Variable von recordLoom, gilt der
+Standardwert aus dem Code; er entspricht dem Wert in `.env.example`.
+Nachtragen ist nur nötig, um etwas anderes einzustellen.
+
+### Login und erster Admin
+
+recordLoom startet mit Login (`RECORDLOOM_LOGIN=true`). Eine Registrierung
+gibt es nicht, nach einer Neuinstallation existiert also noch kein Benutzer.
+Den ersten Admin legt man so an (fragt nach dem Passwort):
+
+```bash
+cd /var/www/recordLoom
+sudo -u www-data php artisan user:admin du@example.com --name="Dein Name"
+```
+
+Platten, die noch keinem Benutzer gehören (z.B. nach einem Umzug von einer
+Version ohne Login), werden die Sammlung dieses Admins. Weitere Benutzer
+lädt der Admin in der App unter *Verwaltung → Benutzer* ein; dafür muss das
+Mail-Versenden eingerichtet sein.
+
+Als Einzelplatz-App ohne Login: `RECORDLOOM_LOGIN=false` in der `.env`
+setzen und `sudo recordloom-deploy` ausführen. Das ist nur sinnvoll, wenn die
+App ausschließlich im eigenen Netz erreichbar ist.
+
+### Hinter einem Reverse-Proxy
+
+Steht vor dem Container ein Reverse-Proxy (z.B. Nginx Proxy Manager, Traefik
+oder Caddy, etwa für einen Zugang von außen), muss recordLoom ihm vertrauen,
+damit Links, Weiterleitungen und sichere Cookies stimmen:
+
+```
+TRUSTED_PROXIES=192.168.1.5        # IP-Adresse des Proxys, mehrere durch Komma getrennt
+APP_URL=https://platten.example.org
+```
+
+Leer (Standard) vertraut recordLoom keinem Proxy. `*` nur verwenden, wenn
+der Container ausschließlich über den Proxy erreichbar ist.
+
 ## Updates
 
 ```bash
@@ -480,6 +518,24 @@ verpasste Läufe nach (z.B. wenn der Container aus war). Gesteuert wird das übe
 | `DISCOGS_NIGHTLY_PRICES`       | `false`         | `true` = Discogs-Preise automatisch abgleichen                |
 | `DISCOGS_PRICE_INTERVAL_HOURS` | `24`            | Abstand des Discogs-Preisabgleichs in Stunden                 |
 | `QUEUE_CONNECTION`             | `database`      | Warteschlange für Benachrichtigungs-Mails, siehe unten        |
+
+Weitere Einstellungen aus `.env.example`, die das Deploy-Skript nicht
+anfasst (Standardwerte von recordLoom):
+
+| Variable                 | Standard       | Bedeutung                                                       |
+| ------------------------ | -------------- | --------------------------------------------------------------- |
+| `BACKUP_MAIL_ENABLED`    | `true`         | `false` schaltet das Mail-Backup des Schedulers ab              |
+| `BACKUP_MAIL_MAX_MB`     | `20`           | Größere Sicherungen werden nicht verschickt (Grenze des Mailservers beachten) |
+| `BACKUP_LOG_FILES`       | `laravel*.log` | Diese Logdateien gehen mit der Backup-Mail mit und werden danach geleert; leer = keine |
+| `BACKUP_LOG_MAX_KB`      | `2048`         | Pro Logdatei höchstens die letzten … KB in der Mail             |
+| `BACKUP_COMPOSER_AUDIT`  | `true`         | Ergebnis von `composer audit` (bekannte Sicherheitslücken der PHP-Pakete) in der Backup-Mail; neue oder behobene Lücken schicken eine eigene Mail |
+| `BACKUP_COMPOSER_BINARY` | `composer`     | Composer-Befehl; der Cronjob findet `/usr/local/bin/composer` bereits über seinen `PATH` |
+| `DISCOGS_MARKETPLACE`    | `false`        | `true` = einzelne Platten auf dem Discogs-Marktplatz verkaufen (braucht `DISCOGS_TOKEN`) |
+
+`BACKUP_LOG_*` und `BACKUP_COMPOSER_*` gibt es ab dem aktuellen Stand von
+recordLoom `dev`. Die Logdateien schreibt das Deploy-Skript als tägliche
+Dateien (`LOG_STACK=daily`, `LOG_DAILY_DAYS=14`), sie passen zum Muster
+`laravel*.log`.
 
 **Warteschlange (`queue:work`):** recordLoom verschickt Benachrichtigungs-Mails
 nicht sofort beim Klick, sondern legt sie in eine Warteschlange in der

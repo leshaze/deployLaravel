@@ -347,6 +347,11 @@ main() {
         show_schedule
         step "Deployment abgeschlossen"
     fi
+    if [ "$fresh" = "1" ]; then
+        # recordLoom hat keine Registrierung: Ohne Admin kommt niemand hinein.
+        info "Ersten Admin anlegen (fragt nach dem Passwort):"
+        info "  cd $APP_DIR && sudo -u $APP_USER $PHP_BIN artisan user:admin du@example.com --name=\"Dein Name\""
+    fi
 }
 
 # Cronjob für den Laravel-Scheduler schreiben (nur wenn er fehlt oder sich
